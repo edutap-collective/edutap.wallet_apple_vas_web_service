@@ -1,5 +1,5 @@
 [project]
-name = "edutap.apple_wallet_vas_web_service"
+name = "edutap.wallet_apple_vas_web_service"
 version = "2.0.0.dev0"
 description = "A Apple Wallet Web Service Implementation."
 keywords = ["wallet", "apple", "web update service", ]
@@ -31,8 +31,8 @@ dependencies = [
   ]
 
 [project.urls]
-Source = "https://github.com/edutap-eu/edutap.apple_wallet_vas_web_service"
-Issues = "https://github.com/edutap-eu/edutap.apple_wallet_vas_web_service/issues"
+Source = "https://github.com/edutap-collective/edutap.wallet_apple_vas_web_service"
+Issues = "https://github.com/edutap-collective/edutap.wallet_apple_vas_web_service/issues"
 Documentation = "https://docs.edutap.eu/packages/edutap_apple_wallet_vas_web_service/index.html"
 
 [project.optional-dependencies]
