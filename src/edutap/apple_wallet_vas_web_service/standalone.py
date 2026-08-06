@@ -11,7 +11,7 @@ import uvicorn
 
 logger.setLevel("DEBUG")
 
-__version__ = version("edutap.apple_wallet_vas_web_service")
+__version__ = version("edutap.wallet_apple_vas_web_service")
 
 
 settings = AppleWalletWebServiceSettings()
