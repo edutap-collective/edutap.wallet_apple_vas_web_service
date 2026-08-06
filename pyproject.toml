@@ -33,7 +33,7 @@ dependencies = [
 [project.urls]
 Source = "https://github.com/edutap-collective/edutap.wallet_apple_vas_web_service"
 Issues = "https://github.com/edutap-collective/edutap.wallet_apple_vas_web_service/issues"
-Documentation = "https://docs.edutap.eu/packages/edutap_apple_wallet_vas_web_service/index.html"
+Documentation = "https://docs.edutap.eu/packages/edutap_wallet_apple_vas_web_service/index.html"
 
 [project.optional-dependencies]
 fastapi = [
