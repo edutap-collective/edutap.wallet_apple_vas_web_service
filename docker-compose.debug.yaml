@@ -7,13 +7,13 @@ services:
     container_name: apple-wallet-vas-web-service
     dns:
       ${DNS:-8.8.8.8}
-    # image: ghcr.io/edutap-eu/edutap.apple_wallet_vas_web_service:latest
+    # image: ghcr.io/edutap-eu/edutap.wallet_apple_vas_web_service:latest
     build:
       context: .
       args:
         - HTTP_PORT=${HTTP_PORT:-80}
     command:
-      ["sh", "-c", "pip install debugpy -t /tmp && python /tmp/debugpy --wait-for-client --listen 0.0.0.0:5678 -m uvicorn edutap.apple_wallet_vas_web_service.standalone:app  --access-log --proxy-headers --reload --host 0.0.0.0 --port 8084"]
+      ["sh", "-c", "pip install debugpy -t /tmp && python /tmp/debugpy --wait-for-client --listen 0.0.0.0:5678 -m uvicorn edutap.wallet_apple_vas_web_service.standalone:app  --access-log --proxy-headers --reload --host 0.0.0.0 --port 8084"]
     ports:
       - "${HTTP_PORT:-8084}:${HTTP_PORT:-80}"
       - "5678:5678"

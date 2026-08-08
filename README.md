@@ -1,4 +1,4 @@
-# eduTAP.apple_wallet_vas_web_service - A Web Service for Apple Wallet
+# eduTAP.wallet_apple_vas_web_service - A Web Service for Apple Wallet
 
 This eduTAP Package provides you with a reusable web service that conforms with the API specification from Apple Wallet.
 

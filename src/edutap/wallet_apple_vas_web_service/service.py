@@ -122,9 +122,9 @@ async def register_pass(
 
     assert data is not None
 
-    with (settings.log_file_path / "apple_wallet_vas_web_service_register_device.log").open(mode="a") as output:
+    with (settings.log_file_path / "wallet_apple_vas_web_service_register_device.log").open(mode="a") as output:
         output.write(f"Register Event for Device: {deviceLibraryIdentitfier=}, {data.pushToken=}\n")
-    with (settings.log_file_path / "apple_wallet_vas_web_service_register_pass.log").open(mode="a") as output:
+    with (settings.log_file_path / "wallet_apple_vas_web_service_register_pass.log").open(mode="a") as output:
         output.write(f"Register Event for Pass: {deviceLibraryIdentitfier=}, {passTypeIdentifier=}, {serialNumber=}\n")
 
     # Register Device
@@ -208,7 +208,7 @@ async def update_pass(
     print(f"{passesUpdatedSince=}")
     print(f"{authorization=}")
 
-    with (settings.log_file_path / "apple_wallet_vas_web_service_update_check.log").open(mode="a") as output:
+    with (settings.log_file_path / "wallet_apple_vas_web_service_update_check.log").open(mode="a") as output:
         output.write(f"Update Check: {deviceLibraryIdentitfier=}, {passTypeIdentifier=}, {passesUpdatedSince=}\n")
 
     if not check_authentification_token(authorization):
@@ -278,7 +278,7 @@ async def unregister_pass(
     if not check_authentification_token(authorization):
         return Response(status_code=401)
 
-    with (settings.log_file_path / "apple_wallet_vas_web_service_unregister.log").open(mode="a") as output:
+    with (settings.log_file_path / "wallet_apple_vas_web_service_unregister.log").open(mode="a") as output:
         output.write(f"Unregister Event for: {deviceLibraryIdentitfier=}, {passTypeIdentifier=}, {serialNumber=}\n")
 
     statement = select(ApplePassRegistry).where(
@@ -328,7 +328,7 @@ async def send_updated_pass(
     if not check_authentification_token(authorization):
         return Response(status_code=401)
 
-    with (settings.log_file_path / "apple_wallet_vas_web_service_unregister.log").open(mode="a") as output:
+    with (settings.log_file_path / "wallet_apple_vas_web_service_unregister.log").open(mode="a") as output:
         output.write(f"Pass Update Request Event for: {passTypeIdentifier=}, {serialNumber=}\n")
 
     statement = select(ApplePassData).where(
@@ -377,7 +377,7 @@ async def device_log(
     """
 
     print(f"logs: {data.logs=}")
-    logfile = settings.log_file_path / "apple_wallet_vas_web_service_report.log"
+    logfile = settings.log_file_path / "wallet_apple_vas_web_service_report.log"
 
     with logfile.open(mode="a") as output:
         for line in data.logs:

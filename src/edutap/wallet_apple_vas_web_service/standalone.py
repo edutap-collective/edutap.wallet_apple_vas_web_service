@@ -1,4 +1,5 @@
 from .config import AppleWalletWebServiceSettings
+from .env_guard import check_retired_env_prefix
 from .service import router
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -6,6 +7,7 @@ from fastapi import Request
 from fastapi.logger import logger
 from importlib.metadata import version
 
+import os
 import uvicorn
 
 
@@ -13,6 +15,10 @@ logger.setLevel("DEBUG")
 
 __version__ = version("edutap.wallet_apple_vas_web_service")
 
+
+# Before the settings are read, not after: every field has a default, so a
+# stale deployment would otherwise start happily against the dev database.
+check_retired_env_prefix(os.environ)
 
 settings = AppleWalletWebServiceSettings()
 
@@ -45,7 +51,7 @@ app = FastAPI(
 @app.get("/")
 async def info():
     return {
-        "package": "edutap.apple_wallet_vas_web_service",
+        "package": "edutap.wallet_apple_vas_web_service",
         "version": __version__,
         # "broker_url": settings.broker_url,
         # "topic": settings.notification_topic,
@@ -65,7 +71,7 @@ async def test_message(request: Request, msg: str):
 
 def main():
     uvicorn.run(
-        "edutap.apple_wallet_vas_web_service.standalone:app",
+        "edutap.wallet_apple_vas_web_service.standalone:app",
         host="0.0.0.0",
         port=8084,
         log_level="debug",

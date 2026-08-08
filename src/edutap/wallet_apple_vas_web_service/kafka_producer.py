@@ -18,7 +18,7 @@ def producer_init():
     logger.info("Initializing producer")
     try:
         producer = KafkaProducer(
-            bootstrap_servers=settings.apple_wallet_vas_web_service.bootstrap_servers,
+            bootstrap_servers=settings.wallet_apple_vas_web_service.bootstrap_servers,
             client_id="edutap-demo-service-producer",
             acks="all",
             retries=3,
@@ -30,7 +30,7 @@ def producer_init():
 producer_init()
 
 
-def send_to_apple_wallet_vas_web_service(
+def send_to_wallet_apple_vas_web_service(
     passTypeIdentifier: str,
     internalPassTypeIdentifier: str,
     serialNumber: str,
@@ -44,10 +44,10 @@ def send_to_apple_wallet_vas_web_service(
         if producer is None:
             raise ValueError(
                 f"Producer can not be not initialized with "
-                f"bootstrap_servers={settings.apple_wallet_vas_web_service.bootstrap_servers}"
+                f"bootstrap_servers={settings.wallet_apple_vas_web_service.bootstrap_servers}"
             )
     producer.send(
-        topic=settings.apple_wallet_vas_web_service.topic,
+        topic=settings.wallet_apple_vas_web_service.topic,
         key={
             "passTypeIdenitfier": passTypeIdentifier,
             "internalPassTypeIdentifier": internalPassTypeIdentifier,
