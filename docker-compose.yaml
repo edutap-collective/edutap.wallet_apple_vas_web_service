@@ -7,7 +7,7 @@ services:
     container_name: apple-wallet-vas-web-service
     dns:
       ${DNS:-8.8.8.8}
-    # image: ghcr.io/edutap-eu/edutap.apple_wallet_vas_web_service:latest
+    # image: ghcr.io/edutap-eu/edutap.wallet_apple_vas_web_service:latest
     build:
       context: .
       args:
@@ -16,12 +16,12 @@ services:
     ports:
       - "${HTTP_PORT:-8084}:${HTTP_PORT:-80}"
     volumes:
-      - "./logs:/var/log/apple_wallet_vas_web_service"
+      - "./logs:/var/log/wallet_apple_vas_web_service"
     environment:
-      - EDUTAP_APPLE_WALLET_VAS_WEB_SERVICE_DB_HOST=${EDUTAP_APPLE_WALLET_VAS_WEB_SERVICE_DB_HOST}
-      - EDUTAP_APPLE_WALLET_VAS_WEB_SERVICE_DB_NAME=${EDUTAP_APPLE_WALLET_VAS_WEB_SERVICE_DB_NAME}
-      - EDUTAP_APPLE_WALLET_VAS_WEB_SERVICE_DB_USERNAME=${EDUTAP_APPLE_WALLET_VAS_WEB_SERVICE_DB_USERNAME}
-      - EDUTAP_APPLE_WALLET_VAS_WEB_SERVICE_DB_PASSWORD=${EDUTAP_APPLE_WALLET_VAS_WEB_SERVICE_DB_PASSWORD}
+      - EDUTAP_WALLET_APPLE_VAS_WEB_SERVICE_DB_HOST=${EDUTAP_WALLET_APPLE_VAS_WEB_SERVICE_DB_HOST}
+      - EDUTAP_WALLET_APPLE_VAS_WEB_SERVICE_DB_NAME=${EDUTAP_WALLET_APPLE_VAS_WEB_SERVICE_DB_NAME}
+      - EDUTAP_WALLET_APPLE_VAS_WEB_SERVICE_DB_USERNAME=${EDUTAP_WALLET_APPLE_VAS_WEB_SERVICE_DB_USERNAME}
+      - EDUTAP_WALLET_APPLE_VAS_WEB_SERVICE_DB_PASSWORD=${EDUTAP_WALLET_APPLE_VAS_WEB_SERVICE_DB_PASSWORD}
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.apple-wallet-vas-web-service.rule=Host(`${DOMAIN}`) && PathPrefix(`/`)"
@@ -38,12 +38,12 @@ services:
     ports:
      - '5432:5432'
     volumes:
-      - ./db/data/apple_wallet_vas_web_service:/var/lib/postgresql/data
+      - ./db/data/wallet_apple_vas_web_service:/var/lib/postgresql/data
       - ./db/import:/docker-entrypoint-initdb.d
     environment:
-      - POSTGRES_DB=${EDUTAP_APPLE_WALLET_VAS_WEB_SERVICE_DB_NAME}
-      - POSTGRES_USER=${EDUTAP_APPLE_WALLET_VAS_WEB_SERVICE_DB_USERNAME}
-      - POSTGRES_PASSWORD=${EDUTAP_APPLE_WALLET_VAS_WEB_SERVICE_DB_PASSWORD}
+      - POSTGRES_DB=${EDUTAP_WALLET_APPLE_VAS_WEB_SERVICE_DB_NAME}
+      - POSTGRES_USER=${EDUTAP_WALLET_APPLE_VAS_WEB_SERVICE_DB_USERNAME}
+      - POSTGRES_PASSWORD=${EDUTAP_WALLET_APPLE_VAS_WEB_SERVICE_DB_PASSWORD}
 
   pgadmin:
       container_name: pgadmin4_container
@@ -74,7 +74,7 @@ services:
         - /bin/sh
         - -c
         - |
-          /usr/bin/python3 /pgadmin4/setup.py --load-servers /pgadmin4/servers.json --user ${EDUTAP_APPLE_WALLET_VAS_WEB_SERVICE_DB_USERNAME} --password ${EDUTAP_APPLE_WALLET_VAS_WEB_SERVICE_DB_PASSWORD}
+          /usr/bin/python3 /pgadmin4/setup.py --load-servers /pgadmin4/servers.json --user ${EDUTAP_WALLET_APPLE_VAS_WEB_SERVICE_DB_USERNAME} --password ${EDUTAP_WALLET_APPLE_VAS_WEB_SERVICE_DB_PASSWORD}
 
   # The fastapi server pushes the callback data to kafka
   kafka:

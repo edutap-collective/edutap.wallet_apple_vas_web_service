@@ -7,7 +7,7 @@ import pytest
 from sqlmodel import  Field, SQLModel, Session, create_engine, delete
 
 from edutap.wallet_apple import models
-from edutap.apple_wallet_vas_web_service import db_models
+from edutap.wallet_apple_vas_web_service import db_models
 
 # dotenv.load_dotenv()  # we need an environment var "CLASS_ID" for ticket creation
 

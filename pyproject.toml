@@ -63,7 +63,7 @@ develop = [
 ]
 
 [project.scripts]
-web_service = "edutap.apple_wallet_vas_web_service.standalone:main"
+web_service = "edutap.wallet_apple_vas_web_service.standalone:main"
 
 [build-system]
 requires = ["setuptools>=61"]

@@ -27,4 +27,4 @@ RUN pip install -U M2Crypto
 RUN pip install -U --no-cache-dir git+https://github.com/edutap-eu/edutap.wallet_apple.git
 RUN pip install --no-cache-dir -e "/app[fastapi,sql,kafka]"
 
-CMD ["sh", "-c", "uvicorn edutap.apple_wallet_vas_web_service.standalone:app --proxy-headers --host 0.0.0.0 --port $HTTP_PORT --access-log --log-level debug"]
+CMD ["sh", "-c", "uvicorn edutap.wallet_apple_vas_web_service.standalone:app --proxy-headers --host 0.0.0.0 --port $HTTP_PORT --access-log --log-level debug"]
