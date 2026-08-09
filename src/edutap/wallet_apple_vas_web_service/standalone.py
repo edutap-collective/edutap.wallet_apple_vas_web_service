@@ -1,5 +1,4 @@
 from .config import AppleWalletWebServiceSettings
-from .env_guard import check_retired_env_prefix
 from .service import router
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -7,18 +6,12 @@ from fastapi import Request
 from fastapi.logger import logger
 from importlib.metadata import version
 
-import os
 import uvicorn
 
 
 logger.setLevel("DEBUG")
 
 __version__ = version("edutap.wallet_apple_vas_web_service")
-
-
-# Before the settings are read, not after: every field has a default, so a
-# stale deployment would otherwise start happily against the dev database.
-check_retired_env_prefix(os.environ)
 
 settings = AppleWalletWebServiceSettings()
 
