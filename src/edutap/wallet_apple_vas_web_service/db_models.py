@@ -12,10 +12,11 @@ from sqlmodel.main import SQLModelConfig
 from typing import Any
 from typing import Generator
 
-from edutap.wallet_apple.models import Pass
+# See the note in service.py: `models` carries no __init__.py upstream, so the name
+# has to come from the module that defines it.
+from edutap.wallet_apple.models.passes import Pass
 
 # from typing import Literal
-# from edutap.wallet_apple.models import Pass
 
 
 # Based on: https://developer.apple.com/documentation/walletpasses/adding_a_web_service_to_update_passes#3733252
@@ -99,19 +100,16 @@ def init_model(engine):
     
     
 def get_session() -> Generator[Session, Any, Any]:
-    print("Read Settings for Create Session")
     settings: AppleWalletWebServiceSettings = AppleWalletWebServiceSettings()
-    print(settings)
 
-    print("Create Engine")
+    # No ``print`` and no ``echo``: the settings instance carries the database
+    # password, and echo writes every statement including its bound parameters --
+    # which for this service is registered device tokens and pass serial numbers.
     engine = create_engine(
         f"{settings.db.type}+{settings.db.driver}://{settings.db.username}:{settings.db.password}@{settings.db.host}{':' + str(settings.db.port) if settings.db.port != 5432 else ''}/{settings.db.name}",
-        echo=True,
     )
-    print(engine.url)
 
     # Generate Tables
     init_model(engine)
-    print("Create Session")
     with Session(engine) as session:
         yield session

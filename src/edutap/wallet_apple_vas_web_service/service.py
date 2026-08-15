@@ -8,22 +8,23 @@ from .http_models import LogEntries
 from .http_models import SerialNumbers
 from contextlib import asynccontextmanager
 from datetime import datetime
-from edutap.wallet_apple.models import Pass
+# `models` is an implicit namespace package upstream -- it has no __init__.py, so
+# the name has to come from the module that defines it rather than from the package.
+from edutap.wallet_apple.models.passes import Pass
 from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import Header
 from fastapi import Request
 from fastapi.responses import Response
-from pathlib import Path
 from sqlmodel import select
 from sqlmodel import Session
 from typing import Annotated
 
+import logging
+import secrets
 
-logfile = Path
-registeredAuthTokens = [
-    "b5b2597a1c5aa2c6019aa065922785d54760a784b98731c344b4fd1eb6dd8eed",
-]
+
+LOGGER = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -40,18 +41,33 @@ router = APIRouter(
 
 
 def check_authentification_token(
-    authorization_header_string: str | None, auth_required: bool = True
+    authorization_header_string: str | None,
+    expected_token: str | None,
+    auth_required: bool = True,
 ) -> bool:
-    if auth_required:
-        if authorization_header_string is not None:
-            authType, authToken = authorization_header_string.split()
-            if authType != "ApplePass":
-                return False
-            if authToken not in registeredAuthTokens:
-                return False
-        else:
-            return False
-    return True
+    """Check the ``Authorization: ApplePass <token>`` header against the settings.
+
+    The accepted token used to be a constant in this file, which put a working
+    credential in a public repository. It now comes from
+    ``EDUTAP_WALLET_APPLE_VAS_WEB_SERVICE_AUTHENTICATION_TOKEN`` (or the matching
+    ``_FILE`` variable, so it can arrive as a Docker secret).
+
+    With ``auth_required`` set and no token configured every request is rejected.
+    A deployment that forgot the value must fail closed, not accept anything.
+    """
+    if not auth_required:
+        return True
+    if authorization_header_string is None or expected_token is None:
+        return False
+    parts = authorization_header_string.split()
+    if len(parts) != 2:
+        return False
+    auth_type, auth_token = parts
+    if auth_type != "ApplePass":
+        return False
+    # Constant time: the comparison decides access, and `==` on str leaks the
+    # length of the matching prefix through its timing.
+    return secrets.compare_digest(auth_token, expected_token)
 
 
 """
@@ -110,31 +126,19 @@ async def register_pass(
     :return:
     """
 
-    print("register pass:")
-    print(f"{deviceLibraryIdentitfier=}")
-    print(f"{passTypeIdentifier=}")
-    print(f"{serialNumber=}")
-    print(f"{authorization=}")
-    print(f"{data=}")
-
-    if not check_authentification_token(authorization, settings.auth_required):
+    if not check_authentification_token(
+        authorization, settings.authentication_token, settings.auth_required
+    ):
         return Response(status_code=401)
 
     assert data is not None
-
-    with (settings.log_file_path / "wallet_apple_vas_web_service_register_device.log").open(mode="a") as output:
-        output.write(f"Register Event for Device: {deviceLibraryIdentitfier=}, {data.pushToken=}\n")
-    with (settings.log_file_path / "wallet_apple_vas_web_service_register_pass.log").open(mode="a") as output:
-        output.write(f"Register Event for Pass: {deviceLibraryIdentitfier=}, {passTypeIdentifier=}, {serialNumber=}\n")
 
     # Register Device
     statement = select(AppleDeviceRegistry).where(
         AppleDeviceRegistry.deviceLibraryIdentitfier == deviceLibraryIdentitfier
     )
     db_device_entry = session.exec(statement)
-    print(db_device_entry)
     db_device_entry = db_device_entry.first()
-    print(db_device_entry)
     if db_device_entry is None:
         new_device_entry = AppleDeviceRegistry(
             deviceLibraryIdentitfier=deviceLibraryIdentitfier, pushToken=data.pushToken
@@ -159,10 +163,8 @@ async def register_pass(
         session.add(new_entry)
         session.commit()
 
-        print(f"write pass to registry: {new_entry}")
         return Response(status_code=201)
 
-    print(f"pass {db_entry} already exists.")
     return Response(status_code=200)
 
 
@@ -202,16 +204,9 @@ async def update_pass(
 
     """
 
-    print("update pass:")
-    print(f"{deviceLibraryIdentitfier=}")
-    print(f"{passTypeIdentifier=}")
-    print(f"{passesUpdatedSince=}")
-    print(f"{authorization=}")
-
-    with (settings.log_file_path / "wallet_apple_vas_web_service_update_check.log").open(mode="a") as output:
-        output.write(f"Update Check: {deviceLibraryIdentitfier=}, {passTypeIdentifier=}, {passesUpdatedSince=}\n")
-
-    if not check_authentification_token(authorization):
+    if not check_authentification_token(
+        authorization, settings.authentication_token, settings.auth_required
+    ):
         return Response(status_code=401)
 
     updatedSince = datetime(1970, 1, 1)
@@ -268,18 +263,11 @@ async def unregister_pass(
     --> if not authorized: 401
 
     """
-    print("unregister pass:")
 
-    print(f"{deviceLibraryIdentitfier=}")
-    print(f"{passTypeIdentifier=}")
-    print(f"{serialNumber=}")
-    print(f"{authorization=}")
-
-    if not check_authentification_token(authorization):
+    if not check_authentification_token(
+        authorization, settings.authentication_token, settings.auth_required
+    ):
         return Response(status_code=401)
-
-    with (settings.log_file_path / "wallet_apple_vas_web_service_unregister.log").open(mode="a") as output:
-        output.write(f"Unregister Event for: {deviceLibraryIdentitfier=}, {passTypeIdentifier=}, {serialNumber=}\n")
 
     statement = select(ApplePassRegistry).where(
         ApplePassRegistry.deviceLibraryIdentitfier == deviceLibraryIdentitfier
@@ -319,17 +307,11 @@ async def send_updated_pass(
     --> if auth token is correct: 200, with pass data payload as pkpass-file
     --> if auth token is incorrect: 401
     """
-    print("send updated pass:")
-    print(f"{passTypeIdentifier=}")
-    print(f"{serialNumber=}")
-    print(f"{authorization=}")
-    print(f"{request.__dict__=}")
 
-    if not check_authentification_token(authorization):
+    if not check_authentification_token(
+        authorization, settings.authentication_token, settings.auth_required
+    ):
         return Response(status_code=401)
-
-    with (settings.log_file_path / "wallet_apple_vas_web_service_unregister.log").open(mode="a") as output:
-        output.write(f"Pass Update Request Event for: {passTypeIdentifier=}, {serialNumber=}\n")
 
     statement = select(ApplePassData).where(
         ApplePassData.passTypeIdentifier == passTypeIdentifier
@@ -337,8 +319,6 @@ async def send_updated_pass(
     )
     results = session.exec(statement)
     db_entries = results.all()
-
-    print(db_entries)
 
     passfile = Pass(db_entries.first().passData)
 
@@ -363,8 +343,6 @@ async def send_updated_pass(
 async def device_log(
     request: Request,
     data: LogEntries,
-    *,
-    settings: AppleWalletWebServiceSettings = Depends(get_settings),
 ):
     """
     Logging/Debugging from the device
@@ -375,12 +353,11 @@ async def device_log(
 
     server response: 200
     """
-
-    print(f"logs: {data.logs=}")
-    logfile = settings.log_file_path / "wallet_apple_vas_web_service_report.log"
-
-    with logfile.open(mode="a") as output:
-        for line in data.logs:
-            output.write(line + "\n")
+    # To the process log, not to a file: three replicas write to three container
+    # filesystems that nothing collects and the next deploy discards. The path this
+    # wrote to does not exist in the image either. Structured logging with the rest
+    # of the estate's fields comes with edutap.observability_settings.
+    for line in data.logs:
+        LOGGER.info("apple device log: %s", line)
 
     return Response(status_code=200)

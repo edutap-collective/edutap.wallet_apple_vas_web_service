@@ -1,4 +1,7 @@
-from edutap.wallet_apple.settings import AppleWalletSettings
+# Imported under an alias: upstream renamed this class from ``AppleWalletSettings``
+# to ``Settings`` in December 2024, and the bare name would sit here next to two
+# other settings classes without saying which package it belongs to.
+from edutap.wallet_apple.settings import Settings as WalletAppleSettings
 from pathlib import Path
 from pydantic import Field
 from pydantic import HttpUrl
@@ -103,11 +106,15 @@ class AppleWalletWebServiceSettings(_FileAwareSettings):
     bootstrap_servers: str | None = None
     topic: str | None = None
 
-    apple: AppleWalletSettings = AppleWalletSettings()
+    # ``default_factory`` rather than an instance in the class body, matching ``db``
+    # below: an instance here is built while this module is imported, so a settings
+    # error would surface as an import failure rather than at the call that reads it.
+    apple: WalletAppleSettings = Field(default_factory=WalletAppleSettings)
     db: DatabaseSettings = Field(default_factory=DatabaseSettings)
 
 
 def get_settings() -> AppleWalletWebServiceSettings:
-    print("Read AppleWalletWebServiceSettings")
-    print(AppleWalletWebServiceSettings())
+    # Nothing is printed here. The settings carry the database password and the
+    # pass authentication token, and printing the instance put both in the container
+    # log in clear text on every request.
     return AppleWalletWebServiceSettings()
