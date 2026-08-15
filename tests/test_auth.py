@@ -10,7 +10,6 @@ import pytest
 
 from edutap.wallet_apple_vas_web_service.service import check_authentification_token
 
-
 TOKEN = "a-configured-token"
 
 

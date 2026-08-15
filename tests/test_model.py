@@ -1,12 +1,13 @@
-from datetime import datetime
 import os
-from pathlib import Path
 import uuid
-import pytest
-# import dotenv
-from sqlmodel import  Field, SQLModel, Session, create_engine, delete
+from pathlib import Path
 
+import pytest
 from edutap.wallet_apple import models
+
+# import dotenv
+from sqlmodel import Session, create_engine, delete
+
 from edutap.wallet_apple_vas_web_service import db_models
 
 # dotenv.load_dotenv()  # we need an environment var "CLASS_ID" for ticket creation
@@ -25,10 +26,16 @@ wwdr_file = certs / "wwdr_certificate.pem"
 # From the environment, not from the file: this line carried a working username and
 # password for someone's local database in a public repository. Point
 # WALLET_APPLE_VAS_WEB_SERVICE_TEST_DSN at a throwaway database to run these tests.
+# Every test in this module talks to a real database: the fixtures create the
+# tables and delete their contents. `make test-local` therefore skips them, and
+# `make test-integration` is what runs them.
+pytestmark = pytest.mark.integration
+
 uri = os.environ.get(
     "WALLET_APPLE_VAS_WEB_SERVICE_TEST_DSN",
     "postgresql://edutap:edutap@localhost:5432/edutaptest",
 )
+
 
 @pytest.fixture
 def engine():
@@ -36,21 +43,23 @@ def engine():
     db_models.init_model(res)
     return res
 
+
 @pytest.fixture
 def session(engine):
     with Session(engine) as session:
         yield session
         # session.rollback()
         session.commit()
-        
+
+
 @pytest.fixture
 def new_session(engine):
     delete_all(engine)
     with Session(engine) as session:
-        
         yield session
         # session.rollback()
-        session.commit()    
+        session.commit()
+
 
 def delete_all(engine):
     with Session(engine) as session:
@@ -60,11 +69,9 @@ def delete_all(engine):
         session.commit()
 
 
-
 def test_create_database(engine):
     delete_all(engine)
-        
-        
+
 
 def load_event_pass():
     buf = open(jsons / "event_ticket.json").read()
@@ -78,13 +85,11 @@ def load_event_pass():
     pass1.addFile("strip.png", open(resources / "eaie-hero.jpg", "rb"))
 
     passdata: db_models.ApplePassData = db_models.ApplePassData.from_pass(pass1)
-    
-    return passdata
- 
- 
-def create_event_pass():
-    pass_file_name = generated_passes_dir / "eventticket.pkpass"
 
+    return passdata
+
+
+def create_event_pass():
     cardInfo = models.EventTicket()
     cardInfo.addPrimaryField("title", "EAIE2023", "event")
     stdBarcode = models.Barcode(
@@ -99,7 +104,7 @@ def create_event_pass():
         serialNumber=sn,
         description="edutap Sample Pass",
         webServiceURL="https://edutap.bluedynamics.net:8443/apple_update_service/v1",
-        authenticationToken="0123456789012345"  # must be 16 characters
+        authenticationToken="0123456789012345",  # must be 16 characters
     )
 
     passfile.barcode = stdBarcode
@@ -114,30 +119,31 @@ def create_event_pass():
 
     return passfile
 
+
 def test_load_event_pass_export():
     """
     create a pass, create a ApplePassData instance, export it and open it
     on OSX the pass should be dsplayed in the pass viewer"""
-    
+
     pass_file_name = generated_passes_dir / "eventticket-roundtrip.pkpass"
 
     pass1 = create_event_pass()
     passdata: db_models.ApplePassData = db_models.ApplePassData.from_pass(pass1)
     pass2 = passdata.to_pass()
-    
+
     zip = pass2.create(
         certs / "private" / "certificate.pem",
         certs / "private" / "private.key",
         certs / "private" / "wwdr_certificate.pem",
         "",
     )
-    
+
     open(pass_file_name, "wb").write(zip.getvalue())
- 
+
     os.system("open " + str(pass_file_name))
-    
-    
-@pytest.mark.integraton
+
+
+@pytest.mark.integration
 def test_load_event_pass(new_session: Session):
     """
     same as above but with database interaction
@@ -148,9 +154,11 @@ def test_load_event_pass(new_session: Session):
     passdata: db_models.ApplePassData = db_models.ApplePassData.from_pass(pass1)
     new_session.add(passdata)
     new_session.commit()
-    
-    passdata = new_session.query(db_models.ApplePassData).get((passdata.passTypeIdentifier, passdata.serialNumber))
-    
+
+    passdata = new_session.query(db_models.ApplePassData).get(
+        (passdata.passTypeIdentifier, passdata.serialNumber)
+    )
+
     pass2 = passdata.to_pass()
     zip = pass2.create(
         certs / "private" / "certificate.pem",
@@ -158,8 +166,7 @@ def test_load_event_pass(new_session: Session):
         certs / "private" / "wwdr_certificate.pem",
         "",
     )
-    
+
     open(pass_file_name, "wb").write(zip.getvalue())
- 
+
     os.system("open " + str(pass_file_name))
- 

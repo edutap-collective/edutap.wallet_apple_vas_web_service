@@ -1,10 +1,10 @@
-from pydantic import BaseModel
-from pydantic import ConfigDict
+"""Request and response bodies of the Apple Wallet web service protocol."""
+
+from pydantic import BaseModel, ConfigDict
 
 
 class AppleWalletWebServiceAuthorizationPayload(BaseModel):
-    """
-    An object that contains the push notification token for a registered pass on a device.
+    """An object that contains the push notification token for a registered pass on a device.
 
     see: https://developer.apple.com/documentation/walletpasses/pushtoken
     """
@@ -18,8 +18,7 @@ class AppleWalletWebServiceAuthorizationPayload(BaseModel):
 
 
 class SerialNumbers(BaseModel):
-    """
-    An object that contains serial numbers for the updatable passes on a device.
+    """An object that contains serial numbers for the updatable passes on a device.
 
     see: https://developer.apple.com/documentation/walletpasses/serialnumbers
     """
@@ -29,8 +28,7 @@ class SerialNumbers(BaseModel):
 
 
 class LogEntries(BaseModel):
-    """
-    An object that contains a list of messages.
+    """An object that contains a list of messages.
 
     see: https://developer.apple.com/documentation/walletpasses/logentries
     """

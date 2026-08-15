@@ -1,0 +1,62 @@
+name: CI
+
+# Until now this repository built an image on every push and tested nothing. That is
+# how a version rename in a dependency reached the cluster: the build was green
+# because a build only proves that pip resolved, not that the code imports.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # Every dependency here is pinned exactly, so nothing drifts on its own -- but the
+  # base image, the runner and the transitive graph still do. A weekly run turns
+  # "something broke us" from a discovery during the next piece of work into a mail
+  # on a Monday.
+  schedule:
+    - cron: "23 5 * * 1"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: ${{ matrix.python }}
+      - run: uv venv
+      # Not `uv pip install --system`: the runner's system interpreter is Debian's
+      # and marked EXTERNALLY-MANAGED, so uv refuses it.
+      - run: uv pip install -e ".[fastapi,sql]" --group dev
+      - run: .venv/bin/python -m pytest -v
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.13"
+      - run: uv venv
+      - run: uv pip install -e ".[fastapi,sql]" --group dev
+      - run: .venv/bin/python -m ruff check src tests
+      - run: .venv/bin/python -m ruff format --check src tests
+      # Reported, not enforced -- see the `typecheck` target in the Makefile for
+      # why. The output belongs in the log of every run; the exit code does not
+      # belong in the gate until the known defects are worked off.
+      - run: .venv/bin/python -m ty check src
+        continue-on-error: true
+
+  image:
+    # The build alone was never enough -- it succeeded for twenty months while the
+    # image it produced could not start. Importing the entry point is the check that
+    # would have caught it, and it costs a second.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: docker build -t edutap-wallet-apple-vas-web-service:ci .
+      - name: The application module imports
+        run: |
+          docker run --rm edutap-wallet-apple-vas-web-service:ci \
+            python -c "import edutap.wallet_apple_vas_web_service.standalone"

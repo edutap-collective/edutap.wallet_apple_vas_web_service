@@ -1,0 +1,78 @@
+// Renovate configuration. JSON5 rather than JSON so the reasoning can live next to
+// the rules — this file decides what arrives unasked in the pull request list, and a
+// rule nobody understands is a rule somebody switches off.
+//
+// This repository has a specific reason to want Renovate: every dependency is pinned
+// exactly, because it is a service. Exact pins without something watching them are
+// how a package sits on a two-year-old release until it breaks. Renovate is the
+// counterweight to the pin, not a contradiction of it.
+{
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+
+  extends: [
+    "config:recommended",
+    // Once a week, before 4 AM. Dependency updates are not news; a Monday morning
+    // batch is read, a stream through the week is dismissed.
+    "schedule:earlyMondays",
+    // .pre-commit-config.yaml pins ruff and pre-commit-hooks by revision. Without
+    // this, those two are the only pins in the repository nothing watches — and they
+    // decide what runs before every commit.
+    ":enablePreCommit",
+  ],
+
+  timezone: "Europe/Berlin",
+
+  // No automerge anywhere. Green CI proves the suite still passes, not that the
+  // update is one we want — and this service's whole outage was an update nobody
+  // chose arriving in a build nobody watched.
+  packageRules: [
+    {
+      matchManagers: ["github-actions"],
+      groupName: "GitHub Actions",
+    },
+    {
+      matchManagers: ["pre-commit"],
+      groupName: "pre-commit hooks",
+    },
+    {
+      // The dev group: tooling, installed nowhere the service runs. One pull request
+      // for the batch is proportionate.
+      matchManagers: ["pep621"],
+      matchDepTypes: ["dependency-groups"],
+      groupName: "development dependencies",
+    },
+    {
+      // Out of that batch: a ruff minor release changes what the linter reports and
+      // reformats files that were correct yesterday. Its own pull request,
+      // describing a decision rather than a bump.
+      matchManagers: ["pep621"],
+      matchPackageNames: ["ruff"],
+      groupName: null,
+      commitMessageTopic: "ruff (rule and formatter changes expected)",
+    },
+    {
+      // Runtime dependencies, each on its own so the pull request is about that
+      // library.
+      matchManagers: ["pep621"],
+      matchDepTypes: ["project.dependencies", "project.optional-dependencies"],
+      groupName: null,
+    },
+    {
+      // This one deserves reading rather than merging. edutap.wallet_apple renamed
+      // its settings class and turned `models` into a namespace package between two
+      // releases, and this package imports both. An upgrade here is an API review.
+      matchManagers: ["pep621"],
+      matchPackageNames: ["edutap.wallet_apple"],
+      groupName: null,
+      commitMessageTopic: "edutap.wallet_apple (check the imports, it has renamed things before)",
+    },
+    {
+      // The Dockerfile copies /usr/local/lib/python3.14/site-packages out of the
+      // build stage by name. A bump to python:3.15-slim moves that path and the
+      // build fails — which is why ci.yml builds an image.
+      matchManagers: ["dockerfile"],
+      matchPackageNames: ["python"],
+      commitMessageTopic: "the Python base image (also update the site-packages path)",
+    },
+  ],
+}

@@ -1,13 +1,14 @@
-from .config import AppleWalletWebServiceSettings
-from .service import router
+"""ASGI application and console entry point of the Apple Wallet web service."""
+
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
-from fastapi import Request
-from fastapi.logger import logger
 from importlib.metadata import version
 
 import uvicorn
+from fastapi import FastAPI, Request
+from fastapi.logger import logger
 
+from .config import AppleWalletWebServiceSettings
+from .service import router
 
 logger.setLevel("DEBUG")
 
@@ -18,6 +19,7 @@ settings = AppleWalletWebServiceSettings()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """Application lifespan: mount the router before the first request."""
     # Initializing
     app.include_router(router)
 
@@ -43,6 +45,7 @@ app = FastAPI(
 
 @app.get("/")
 async def info():
+    """Report package name and version."""
     return {
         "package": "edutap.wallet_apple_vas_web_service",
         "version": __version__,
@@ -53,19 +56,24 @@ async def info():
 
 @app.get("/openapi.json")
 async def openapi():
+    """Return the generated OpenAPI schema."""
     return app.openapi()
 
 
 @app.post("/test/message")
 async def test_message(request: Request, msg: str):
+    """Accept a test message and do nothing with it; the producer is not wired up."""
     return
     # await kafka_producer.send_and_wait("test", msg.encode("utf-8"))
 
 
 def main():
+    """Run the service with uvicorn; the console script entry point."""
     uvicorn.run(
         "edutap.wallet_apple_vas_web_service.standalone:app",
-        host="0.0.0.0",
+        # Binding to every interface is what a container needs -- the process owns
+        # its network namespace, and the published port is the deployment's decision.
+        host="0.0.0.0",  # noqa: S104
         port=8084,
         log_level="debug",
         reload=True,
