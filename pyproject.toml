@@ -21,13 +21,25 @@ classifiers = [
     "Topic :: Software Development :: Object Brokering",
     "Operating System :: OS Independent",
 ]
+# Exact pins, because this is a service rather than a library. A library states the
+# range it works with and lets the application resolve; an application decides, and
+# what it decided is what has to reach the cluster. Unpinned is how this service
+# broke: `edutap.wallet_apple` was named without a version, the image build pulled
+# whatever was current, and the class this package imports had been renamed twenty
+# months earlier. A deploy must roll out what was decided, not what happened to be
+# newest on the day the build ran.
+#
+# Raising a pin is therefore a reviewed change, and Renovate proposes them.
 dependencies = [
-    "pydantic[email,dotenv]>=2.0",
-    "pydantic-settings",
-    "sqlmodel",
-    "psycopg2-binary",
-    "edutap.wallet_apple",
-    "requests",
+    "pydantic[email,dotenv]==2.13.4",
+    "pydantic-settings==2.15.0",
+    "sqlmodel==0.0.39",
+    "psycopg2-binary==2.9.12",
+    # Pinned to the release on PyPI, not to the git default branch. The Dockerfile
+    # used to install this straight from `main`, which is what made every rebuild a
+    # different image.
+    "edutap.wallet_apple==1.0.0a5",
+    "requests==2.34.2",
   ]
 
 [project.urls]
@@ -37,20 +49,20 @@ Documentation = "https://docs.edutap.eu/packages/edutap_wallet_apple_vas_web_ser
 
 [project.optional-dependencies]
 fastapi = [
-    "fastapi",
-    "uvicorn[standard]",
+    "fastapi==0.141.1",
+    "uvicorn[standard]==0.52.3",
 ]
 kafka = [
-    "aiokafka",
+    "aiokafka==0.14.0",
 ]
 sql = [
-    "sqlalchemy",
-    "psycopg2-binary",
-    "sqlmodel",
+    "sqlalchemy==2.0.52",
+    "psycopg2-binary==2.9.12",
+    "sqlmodel==0.0.39",
 ]
 test = [
-    "pytest",
-    "requests-mock",
+    "pytest==9.1.1",
+    "requests-mock==1.12.1",
 ]
 typecheck  = [
     "mypy",

@@ -22,7 +22,13 @@ cert_file = certs / "certificate.pem"
 key_file = certs / "private.key"
 wwdr_file = certs / "wwdr_certificate.pem"
 
-uri = "postgresql://phil:uehagrawupl@localhost:5432/edutaptest"
+# From the environment, not from the file: this line carried a working username and
+# password for someone's local database in a public repository. Point
+# WALLET_APPLE_VAS_WEB_SERVICE_TEST_DSN at a throwaway database to run these tests.
+uri = os.environ.get(
+    "WALLET_APPLE_VAS_WEB_SERVICE_TEST_DSN",
+    "postgresql://edutap:edutap@localhost:5432/edutaptest",
+)
 
 @pytest.fixture
 def engine():
