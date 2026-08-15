@@ -1,17 +1,16 @@
+"""Settings of the service, including the Docker ``<ENV>_FILE`` secrets convention."""
+
 # Imported under an alias: upstream renamed this class from ``AppleWalletSettings``
 # to ``Settings`` in December 2024, and the bare name would sit here next to two
 # other settings classes without saying which package it belongs to.
-from edutap.wallet_apple.settings import Settings as WalletAppleSettings
+import os
 from pathlib import Path
-from pydantic import Field
-from pydantic import HttpUrl
-from pydantic.fields import FieldInfo
-from pydantic_settings import BaseSettings
-from pydantic_settings import PydanticBaseSettingsSource
-from pydantic_settings import SettingsConfigDict
 from typing import Any
 
-import os
+from edutap.wallet_apple.settings import Settings as WalletAppleSettings
+from pydantic import Field, HttpUrl
+from pydantic.fields import FieldInfo
+from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
 
 class FileSecretsSource(PydanticBaseSettingsSource):
@@ -23,9 +22,8 @@ class FileSecretsSource(PydanticBaseSettingsSource):
     environment.
     """
 
-    def get_field_value(
-        self, field: FieldInfo, field_name: str
-    ) -> tuple[Any, str, bool]:
+    def get_field_value(self, field: FieldInfo, field_name: str) -> tuple[Any, str, bool]:
+        """Return the field's value from the file named by ``<PREFIX><FIELD>_FILE``."""
         prefix = self.config.get("env_prefix", "") or ""
         base = f"{prefix}{field_name}_file"
         for env_name in (base, base.upper()):
@@ -37,9 +35,11 @@ class FileSecretsSource(PydanticBaseSettingsSource):
     def prepare_field_value(
         self, field_name: str, field: FieldInfo, value: Any, value_is_complex: bool
     ) -> Any:
+        """Pass the value through unchanged; file contents need no further parsing."""
         return value
 
     def __call__(self) -> dict[str, Any]:
+        """Collect every field that has a readable ``_FILE`` companion."""
         data: dict[str, Any] = {}
         for field_name, field in self.settings_cls.model_fields.items():
             value, key, _ = self.get_field_value(field, field_name)
@@ -70,7 +70,7 @@ class _FileAwareSettings(BaseSettings):
 
 
 class DatabaseSettings(_FileAwareSettings):
-    """ """
+    """Connection parameters for the shared eduTAP PostgreSQL database."""
 
     model_config = SettingsConfigDict(
         env_prefix="EDUTAP_WALLET_APPLE_VAS_WEB_SERVICE_DB_",
@@ -89,7 +89,9 @@ class DatabaseSettings(_FileAwareSettings):
 
 
 class AppleWalletWebServiceSettings(_FileAwareSettings):
-    """ """
+    """Settings of the Apple Wallet web service, prefix
+    ``EDUTAP_WALLET_APPLE_VAS_WEB_SERVICE_``.
+    """
 
     model_config = SettingsConfigDict(
         env_prefix="EDUTAP_WALLET_APPLE_VAS_WEB_SERVICE_",
@@ -114,6 +116,7 @@ class AppleWalletWebServiceSettings(_FileAwareSettings):
 
 
 def get_settings() -> AppleWalletWebServiceSettings:
+    """Build the settings for one request; used as a FastAPI dependency."""
     # Nothing is printed here. The settings carry the database password and the
     # pass authentication token, and printing the instance put both in the container
     # log in clear text on every request.

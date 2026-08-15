@@ -1,4 +1,0 @@
-include *.yaml
-include Dockerfile
-exclude .vscode/launch.json
-exclude pgadmin/servers.json

@@ -49,3 +49,11 @@ var/
 /*.json
 /kafka_data/
 /letsencrypt/
+
+# uv / ruff / pytest
+.venv/
+.ruff_cache/
+.pytest_cache/
+# uv.lock is not committed: the pins live in pyproject.toml and are exact, so a lock
+# file would restate them and then drift from them. It is the pin that is reviewed.
+uv.lock

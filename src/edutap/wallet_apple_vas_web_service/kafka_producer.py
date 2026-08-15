@@ -1,17 +1,27 @@
-from .config import AppleWalletWebServiceSettings
-from datetime import datetime
-from datetime import timezone
+"""Kafka producer for pass lifecycle events.
+
+NOT REACHED BY THE APPLICATION. This module imports ``kafka`` while the package
+declares ``aiokafka``, and it reads ``settings.wallet_apple_vas_web_service.*``,
+which does not exist. Nothing imports it. It is kept because the events it
+describes are still wanted; it needs rewriting against ``edutap.data_models``
+before it can run.
+"""
+
+from datetime import UTC, datetime
+from typing import Literal
+
 from fastapi import logger
 from kafka import KafkaProducer
 from pydantic import BaseModel
-from typing import Literal
 
+from .config import AppleWalletWebServiceSettings
 
 producer: KafkaProducer = None
 settings: AppleWalletWebServiceSettings = AppleWalletWebServiceSettings()
 
 
 def producer_init():
+    """Create the module-level producer once, tolerating an absent broker."""
     global producer
     if producer is not None:
         return
@@ -30,7 +40,7 @@ def producer_init():
 producer_init()
 
 
-def send_to_wallet_apple_vas_web_service(
+def send_to_wallet_apple_vas_web_service(  # noqa: D103 -- see the module docstring
     passTypeIdentifier: str,
     internalPassTypeIdentifier: str,
     serialNumber: str,
@@ -52,7 +62,7 @@ def send_to_wallet_apple_vas_web_service(
             "passTypeIdenitfier": passTypeIdentifier,
             "internalPassTypeIdentifier": internalPassTypeIdentifier,
             "serialNumber": serialNumber,
-            "createTime": createTime if createTime else datetime.now(tz=timezone.utc),
+            "createTime": createTime if createTime else datetime.now(tz=UTC),
         },
         value=payload.model_dump_json(),
     )

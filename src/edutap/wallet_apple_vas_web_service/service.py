@@ -1,34 +1,28 @@
-from .config import AppleWalletWebServiceSettings, get_settings
-from .db_models import AppleDeviceRegistry
-from .db_models import ApplePassData
-from .db_models import ApplePassRegistry
-from .db_models import get_session
-from .http_models import AppleWalletWebServiceAuthorizationPayload
-from .http_models import LogEntries
-from .http_models import SerialNumbers
-from contextlib import asynccontextmanager
-from datetime import datetime
-# `models` is an implicit namespace package upstream -- it has no __init__.py, so
-# the name has to come from the module that defines it rather than from the package.
-from edutap.wallet_apple.models.passes import Pass
-from fastapi import APIRouter
-from fastapi import Depends
-from fastapi import Header
-from fastapi import Request
-from fastapi.responses import Response
-from sqlmodel import select
-from sqlmodel import Session
-from typing import Annotated
+"""The Apple Wallet web service endpoints: register, list, unregister, deliver, log."""
 
 import logging
 import secrets
+from contextlib import asynccontextmanager
+from datetime import datetime
+from typing import Annotated
 
+# `models` is an implicit namespace package upstream -- it has no __init__.py, so
+# the name has to come from the module that defines it rather than from the package.
+from edutap.wallet_apple.models.passes import Pass
+from fastapi import APIRouter, Depends, Header, Request
+from fastapi.responses import Response
+from sqlmodel import Session, select
+
+from .config import AppleWalletWebServiceSettings, get_settings
+from .db_models import AppleDeviceRegistry, ApplePassData, ApplePassRegistry, get_session
+from .http_models import AppleWalletWebServiceAuthorizationPayload, LogEntries, SerialNumbers
 
 LOGGER = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(router: APIRouter):
+    """Router lifespan; nothing to set up or tear down yet."""
     # setup phase
     yield
     # shutdown
@@ -89,49 +83,63 @@ async def register_pass(
     settings: AppleWalletWebServiceSettings = Depends(get_settings),
     session: Session = Depends(get_session),
 ):
-    """
-    Registration: register a device to receive push notifications for a pass.
+    """Registration: register a device to receive push notifications for a pass.
 
     see: https://developer.apple.com/documentation/walletpasses/register_a_pass_for_update_notifications
 
     URL: POST https://yourpasshost.example.com/v1/devices/{deviceLibraryIdentifier}/registrations/{passTypeIdentifier}/{serialNumber}
     HTTP-Methode: POST
-    HTTP-PATH: /v1/devices/{deviceLibraryIdentifier}/registrations/{passTypeIdentifier}/{serialNumber}
+    HTTP-PATH:
+        /v1/devices/{deviceLibraryIdentifier}/registrations/{passTypeIdentifier}/{serialNumber}
     HTTP-Path-Parameters:
-        * deviceLibraryIdentifier: str (required) A unique identifier you use to identify and authenticate the device.
-        * passTypeIdentifier: str (required) The pass type identifier of the pass to register for update notifications. This value corresponds to the value of the passTypeIdentifier key of the pass.
+        * deviceLibraryIdentifier: str (required) A unique identifier you use to
+          identify and authenticate the device.
+        * passTypeIdentifier: str (required) The pass type identifier of the pass to
+          register for update notifications. This value corresponds to the value of
+          the passTypeIdentifier key of the pass.
         * serialNumber: str (required)
     HTTP-Headers:
         * Authorization: ApplePass <authenticationToken>
     HTTP-Body: JSON payload:
-        * pushToken: <push token, which the server needs to send push notifications to this device> }
+        * pushToken: <push token, which the server needs to send push notifications
+          to this device> }
 
     Params definition
     :deviceLibraryIdentitfier      - the device's identifier
-    :passTypeIdentifier   - the bundle identifier for a class of passes, sometimes referred to as the pass topic, e.g. pass.com.apple.backtoschoolgift, registered with WWDR
+    :passTypeIdentifier   - the bundle identifier for a class of passes, sometimes
+        referred to as the pass topic, e.g. pass.com.apple.backtoschoolgift,
+        registered with WWDR
     :serialNumber  - the pass' serial number
     :pushToken      - the value needed for Apple Push Notification service
 
-    server action: if the authentication token is correct, associate the given push token and device identifier with this pass
+    server action: if the authentication token is correct, associate the given push
+        token and device identifier with this pass
     server response:
     --> if registration succeeded: 201
     --> if this serial number was already registered for this device: 304
     --> if not authorized: 401
 
     :async:
-    :param str deviceLibraryIdentifier: A unique identifier you use to identify and authenticate the device.
-    :param str passTypeIdentifier:      The pass type identifier of the pass to register for update notifications. This value corresponds to the value of the passTypeIdentifier key of the pass.
-    :param str serialNumber:            The serial number of the pass to register. This value corresponds to the serialNumber key of the pass.
+    :param str deviceLibraryIdentifier: A unique identifier you use to identify and
+        authenticate the device.
+    :param str passTypeIdentifier:      The pass type identifier of the pass to
+        register for update notifications. This value corresponds to the value of the
+        passTypeIdentifier key of the pass.
+    :param str serialNumber:            The serial number of the pass to register.
+        This value corresponds to the serialNumber key of the pass.
 
     :return:
     """
-
     if not check_authentification_token(
         authorization, settings.authentication_token, settings.auth_required
     ):
         return Response(status_code=401)
 
-    assert data is not None
+    # A missing body is a bad request, not an assertion. `assert` disappears under
+    # `python -O`, which would let a None reach `data.pushToken` below and turn a
+    # malformed registration into a 500.
+    if data is None:
+        return Response(status_code=400)
 
     # Register Device
     statement = select(AppleDeviceRegistry).where(
@@ -179,8 +187,7 @@ async def update_pass(
     settings: AppleWalletWebServiceSettings = Depends(get_settings),
     session: Session = Depends(get_session),
 ):
-    """
-    Get List of Updatable Passes
+    """Get List of Updatable Passes
 
     see: https://developer.apple.com/documentation/walletpasses/get_the_list_of_updatable_passes
 
@@ -192,9 +199,11 @@ async def update_pass(
     GET /v1/devices/<deviceID>/registrations/<typeID>
     GET /v1/devices/<deviceID>/registrations/<typeID>?passesUpdatedSince=<tag>
 
-    server action: figure out which passes associated with this device have been modified since the supplied tag (if no tag provided, all associated serial #s)
+    server action: figure out which passes associated with this device have been
+        modified since the supplied tag (if no tag provided, all associated serial #s)
     server response:
-    --> if there are matching passes: 200, with JSON payload: { "lastUpdated" : <new tag>, "serialNumbers" : [ <array of serial #s> ] }
+    --> if there are matching passes: 200, with JSON payload:
+        { "lastUpdated" : <new tag>, "serialNumbers" : [ <array of serial #s> ] }
     --> if there are no matching passes: 204
     --> if unknown device identifier: 404
 
@@ -203,7 +212,6 @@ async def update_pass(
     :param str
 
     """
-
     if not check_authentification_token(
         authorization, settings.authentication_token, settings.auth_required
     ):
@@ -213,9 +221,7 @@ async def update_pass(
     if passesUpdatedSince:
         updatedSince = datetime.fromtimestamp(float(passesUpdatedSince))
 
-    statement = select(ApplePassData).where(
-        ApplePassData.passTypeIdentifier == passTypeIdentifier
-    )
+    statement = select(ApplePassData).where(ApplePassData.passTypeIdentifier == passTypeIdentifier)
     db_entries = session.exec(statement).all()
 
     if db_entries:
@@ -249,8 +255,7 @@ async def unregister_pass(
     settings: AppleWalletWebServiceSettings = Depends(get_settings),
     session: Session = Depends(get_session),
 ):
-    """
-    Unregister
+    """Unregister
 
     unregister a device to receive push notifications for a pass
 
@@ -263,7 +268,6 @@ async def unregister_pass(
     --> if not authorized: 401
 
     """
-
     if not check_authentification_token(
         authorization, settings.authentication_token, settings.auth_required
     ):
@@ -297,8 +301,7 @@ async def send_updated_pass(
     settings: AppleWalletWebServiceSettings = Depends(get_settings),
     session: Session = Depends(get_session),
 ):
-    """
-    Pass delivery
+    """Pass delivery
 
     GET /v1/passes/<typeID>/<serial#>
     Header: Authorization: ApplePass <authenticationToken>
@@ -307,7 +310,6 @@ async def send_updated_pass(
     --> if auth token is correct: 200, with pass data payload as pkpass-file
     --> if auth token is incorrect: 401
     """
-
     if not check_authentification_token(
         authorization, settings.authentication_token, settings.auth_required
     ):
@@ -333,9 +335,7 @@ async def send_updated_pass(
         zip.getvalue(),
         status_code=200,
         media_type="application/vnd.apple.pkpass",
-        headers={
-            "Content-Disposition": f'attachment; filename="{serialNumber}.pkpass"'
-        },
+        headers={"Content-Disposition": f'attachment; filename="{serialNumber}.pkpass"'},
     )
 
 
@@ -344,8 +344,7 @@ async def device_log(
     request: Request,
     data: LogEntries,
 ):
-    """
-    Logging/Debugging from the device
+    """Logging/Debugging from the device
 
     log an error or unexpected server behavior, to help with server debugging
     POST /v1/log

@@ -1,26 +1,32 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
 [project]
 name = "edutap.wallet_apple_vas_web_service"
 version = "1.1.0.dev0"
-description = "A Apple Wallet Web Service Implementation."
-keywords = ["wallet", "apple", "web update service", ]
+description = "Apple Wallet web service: pass registration, update lists and pass delivery"
+keywords = ["wallet", "apple", "web update service"]
 readme = "README.md"
 authors = [
-    {name = "Philipp Auersperg-Castell", email = "phil@bluedynamics.com"},
-    {name = "Alexander Loechel", email = "Alexander.Loechel@lmu.de"},
+    { name = "Philipp Auersperg-Castell", email = "phil@bluedynamics.com" },
+    { name = "Alexander Loechel", email = "Alexander.Loechel@lmu.de" },
 ]
-requires-python = ">=3.10"
-license = { text = "EUPL 1.2" }
+# 3.13, matching edutap.data_provider. The floor was ">=3.10" with classifiers
+# stopping at 3.12; 3.10 reaches end of life in October 2026 and a service should
+# not start its rework on an interpreter that outlives it by months.
+requires-python = ">=3.13"
+license = "EUPL-1.2"
 classifiers = [
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "License :: OSI Approved :: European Union Public Licence 1.2 (EUPL 1.2)",
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Topic :: Software Development :: Libraries",
-    "Topic :: Software Development :: Object Brokering",
     "Operating System :: OS Independent",
 ]
+
 # Exact pins, because this is a service rather than a library. A library states the
 # range it works with and lets the application resolve; an application decides, and
 # what it decided is what has to reach the cluster. Unpinned is how this service
@@ -29,9 +35,12 @@ classifiers = [
 # months earlier. A deploy must roll out what was decided, not what happened to be
 # newest on the day the build ran.
 #
-# Raising a pin is therefore a reviewed change, and Renovate proposes them.
+# Raising a pin is therefore a reviewed change, and Renovate proposes them one at a
+# time — see renovate.json5.
 dependencies = [
-    "pydantic[email,dotenv]==2.13.4",
+    # No `dotenv` extra: that was pydantic v1. In v2 the .env handling moved to
+    # pydantic-settings below, and uv warns that the extra does not exist.
+    "pydantic[email]==2.13.4",
     "pydantic-settings==2.15.0",
     "sqlmodel==0.0.39",
     "psycopg2-binary==2.9.12",
@@ -40,14 +49,13 @@ dependencies = [
     # different image.
     "edutap.wallet_apple==1.0.0a5",
     "requests==2.34.2",
-  ]
-
-[project.urls]
-Source = "https://github.com/edutap-collective/edutap.wallet_apple_vas_web_service"
-Issues = "https://github.com/edutap-collective/edutap.wallet_apple_vas_web_service/issues"
-Documentation = "https://docs.edutap.eu/packages/edutap_wallet_apple_vas_web_service/index.html"
+]
 
 [project.optional-dependencies]
+# Runtime extras: what a deployment chooses, and therefore genuinely optional
+# dependencies rather than a dependency group. `fastapi` and `sql` are both required
+# in practice -- the Dockerfile installs them -- but they stay selectable because the
+# package is also importable as a library.
 fastapi = [
     "fastapi==0.141.1",
     "uvicorn[standard]==0.52.3",
@@ -60,53 +68,79 @@ sql = [
     "psycopg2-binary==2.9.12",
     "sqlmodel==0.0.39",
 ]
-test = [
+
+# PEP 735 rather than an extra: development tooling is nothing a consumer of this
+# package can select, and an extra would publish it in the package metadata. Install
+# with `uv pip install -e . --group dev`, which is what the Makefile and CI do.
+[dependency-groups]
+dev = [
     "pytest==9.1.1",
     "requests-mock==1.12.1",
+    # Pinned tightly on purpose: a ruff minor release changes what the linter reports
+    # and reformats files that were correct yesterday. That is a decision, not a bump.
+    "ruff==0.16.3",
+    "ty==0.0.72",
+    "pdbp==1.8.2",
+    # fastapi.testclient needs an HTTP client; without one the API tests cannot run.
+    "httpx==0.28.1",
 ]
-typecheck  = [
-    "mypy",
-    "types-requests",
-    "pytest-stub",
-]
-develop = [
-    "pdbpp",
-    "ipython",
-]
+
+[project.urls]
+Source = "https://github.com/edutap-collective/edutap.wallet_apple_vas_web_service"
+Issues = "https://github.com/edutap-collective/edutap.wallet_apple_vas_web_service/issues"
+Documentation = "https://docs.edutap.eu/packages/edutap_wallet_apple_vas_web_service/index.html"
 
 [project.scripts]
 web_service = "edutap.wallet_apple_vas_web_service.standalone:main"
 
-[build-system]
-requires = ["setuptools>=61"]
-build-backend = "setuptools.build_meta"
-
-[tool.setuptools.packages.find]
-where = ["src"]
+[tool.hatch.build.targets.wheel]
+packages = ["src/edutap"]
 
 [tool.pytest.ini_options]
-minversion = "6.0"
-testpaths = [
-    "tests",
+testpaths = ["tests"]
+markers = [
+    "integration: needs a PostgreSQL database (WALLET_APPLE_VAS_WEB_SERVICE_TEST_DSN)",
 ]
+# The database-backed tests are excluded by default and run in their own CI job.
+# Without this, a plain `pytest` fails on any machine without PostgreSQL, and a suite
+# that fails for environmental reasons is a suite nobody runs.
+addopts = "-m 'not integration'"
 
-[tool.isort]
-profile = "plone"
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
 
-[tool.black]
-target-version = ["py310"]
-include = "src"
-
-[tool.codespell]
-ignore-words-list = "discreet,"
-skip = "*.json"
-
-[tool.check-manifest]
+[tool.ruff.lint]
+# The same set as edutap.data_provider. `N` (pep8-naming) is deliberately absent:
+# the Apple web service protocol dictates camelCase -- deviceLibraryIdentifier,
+# passTypeIdentifier, serialNumber are what the device sends and what the JSON
+# carries -- and renaming them would mean translating on every boundary.
+select = ["E", "F", "W", "B", "I", "UP", "D", "S"]
 ignore = [
-    ".editorconfig",
-    ".pre-commit-config.yaml",
-    "tox.ini",
-    "mypy.ini",
-    ".flake8",
-    "mx.ini",
+    "D203",
+    "D213",
+    # `Depends(...)` in a parameter default is how FastAPI declares a dependency --
+    # the framework evaluates it per request, not once at import. B008 is right about
+    # plain Python and wrong about every FastAPI endpoint in this package.
+    "B008",
+    # The docstring STYLE rules are off; the docstring PRESENCE rules (D1xx) stay on.
+    #
+    # The endpoint docstrings quote Apple's web service reference -- the request and
+    # response shapes, the status codes, the parameter descriptions. That text is a
+    # primary source, and the value of having it here is that it says what Apple says.
+    # Rules that demand a trailing period, an imperative summary or a particular blank
+    # line would have us reword it, and a reworded quotation is worth less than the
+    # quotation. Where the wording is ours we still write it properly; that is a
+    # matter of care rather than of a linter.
+    "D205",
+    "D212",
+    "D400",
+    "D401",
+    "D415",
 ]
+
+[tool.ruff.lint.per-file-ignores]
+# S105/S106: the fixtures assign literal tokens, which is what a test of an
+# authentication check has to do. S605: the pass-inspection tests shell out to open a
+# generated .pkpass; that is their point.
+"tests/*" = ["D", "S101", "S105", "S106", "S605"]
