@@ -203,15 +203,30 @@ async def unregister_pass(
         session.delete(registration)
         session.flush()
 
+    # Lock the device row before deciding whether it still holds any
+    # registrations: that decision is a negative existence check ("nothing
+    # references this device"), and Postgres has no lock that protects the
+    # *absence* of a row -- only rows that exist can be locked. The
+    # registration's foreign key does not close this gap either: a concurrent
+    # `_upsert_device` only needs a `KEY SHARE` lock to satisfy that
+    # constraint, which does not conflict with a plain read here, so this
+    # transaction could still see "no registrations left" while a
+    # registration for this device is being created elsewhere -- and then
+    # delete the device out from under it. `with_for_update=True` takes the
+    # stronger lock `_upsert_device`'s `ON CONFLICT DO UPDATE` also needs,
+    # so a concurrent registration for this device blocks here until this
+    # transaction commits or rolls back: whichever side finishes first is
+    # the one the other one sees. Do not remove this thinking it is
+    # redundant with the foreign key -- it is not.
+    device = session.get(Device, deviceLibraryIdentifier, with_for_update=True)
+
     remaining = session.exec(
         select(Registration).where(
             Registration.device_library_identifier == deviceLibraryIdentifier
         )
     ).first()
-    if remaining is None:
-        device = session.get(Device, deviceLibraryIdentifier)
-        if device is not None:
-            session.delete(device)
+    if remaining is None and device is not None:
+        session.delete(device)
 
     session.commit()
     return Response(status_code=200)
