@@ -10,18 +10,24 @@ silently owned a schema it is only a user of.
 from collections.abc import Generator
 from functools import lru_cache
 
-from sqlalchemy import Engine
+from sqlalchemy import URL, Engine
 from sqlmodel import Session, create_engine
 
 from .config import AppleWalletWebServiceSettings
 
 
 @lru_cache(maxsize=8)
-def get_engine(url: str) -> Engine:
+def get_engine(url: URL) -> Engine:
     """Return the process-wide engine for one URL.
 
     Cached by URL, not rebuilt per request: an engine owns a connection pool,
-    and one per request is a new pool per request.
+    and one per request is a new pool per request. A `sqlalchemy.URL` object
+    is hashable, the same as the string this took before, so the cache still
+    works -- see `DatabaseSettings.url()` for why it is a `URL` and not an
+    f-string DSN: an f-string is the plaintext password itself, and
+    `create_engine` binds its `url` argument as a local of its own frame, so
+    a construction failure -- a typo'd dialect, an unreachable host -- would
+    otherwise put it in clear text on the raised exception's traceback.
 
     No `echo`. It writes every statement including its bound parameters, which
     here are push tokens and pass serial numbers.

@@ -9,10 +9,14 @@ The property this module aims to hold, stated precisely rather than rounded
 up -- an earlier version of this docstring overclaimed it, which is exactly
 the failure mode this comment now exists to prevent a reader from repeating:
 
-    No frame reachable from a raised exception -- through its own traceback,
-    or through `__context__`/`__cause__` -- binds the producer's bearer token
-    or the database password in a form a generic `repr()`-based capture tool
-    would expose.
+    No frame reachable from a raised `Exception` -- through its own
+    traceback, or through `__context__`/`__cause__` -- binds the producer's
+    bearer token or the database password in a form a generic `repr()`-based
+    capture tool would expose.
+
+`Exception`, deliberately, not "a raised exception" unqualified -- see the
+two named exceptions to this property near the end of this docstring before
+treating it as unconditional.
 
 What makes that true, mechanism by mechanism:
 
@@ -47,19 +51,43 @@ message raised afterward so an operator is not left with a message that
 cannot distinguish a DNS failure from a broken TLS handshake -- see the
 comment in `fetch_pass`.
 
-What the property above does **not** cover, stated rather than left for a
-reader to assume: `settings` is unavoidably a local at every raise site in
-`fetch_pass` -- it is the function's own parameter, carrying both the
-producer's bearer token and (through `settings.db`) the database password.
-Both now sit behind pydantic's `SecretStr`, which defeats `repr()`, `str()`,
-and JSON serialization -- the class of capture this module defends against
-throughout. It does not defeat a tool that walks object attributes looking
-for a `SecretStr` specifically and reads its private `_secret_value`, or
-that calls `.get_secret_value()` itself. That gap is accepted, not closed:
-no code in this codebase treats `SecretStr` as a complete defense against a
-deliberately targeted extraction, only against generic serialization -- and
-`settings` cannot be kept out of `fetch_pass`'s frame the way the header
-dict and the response were, because the function genuinely needs it.
+What the property above does **not** cover -- two things, named here rather
+than left for a reader to assume, because a false "closed" is worse than an
+honest "not closed":
+
+1. `settings` is unavoidably a local at every raise site in `fetch_pass` --
+   it is the function's own parameter, carrying both the producer's bearer
+   token and (through `settings.db`) the database password. Both now sit
+   behind pydantic's `SecretStr`, which defeats `repr()`, `str()`, and JSON
+   serialization -- the class of capture this module defends against
+   throughout. It does not defeat a tool that walks object attributes
+   looking for a `SecretStr` specifically and reads its private
+   `_secret_value`, or that calls `.get_secret_value()` itself. That gap is
+   accepted, not closed: no code in this codebase treats `SecretStr` as a
+   complete defense against a deliberately targeted extraction, only against
+   generic serialization -- and `settings` cannot be kept out of
+   `fetch_pass`'s frame the way the header dict and the response were,
+   because the function genuinely needs it.
+
+2. `BaseException` subclasses outside `Exception` -- `KeyboardInterrupt`,
+   `SystemExit`, `GeneratorExit` -- are not caught by `except Exception:`
+   below and escape `fetch_pass` with `_get`'s frame (and `requests`' own
+   frames) still attached, `headers` and all. Measured: raising
+   `KeyboardInterrupt` from inside the mocked `requests.get` call lets it
+   propagate out of `fetch_pass` uncaught, and
+   `traceback.TracebackException.from_exception(error, capture_locals=True)`
+   renders the plaintext bearer token from `_get`'s frame. This is
+   deliberately **not** closed by widening the catch to `except
+   BaseException:` -- swallowing a `KeyboardInterrupt` or `SystemExit` into a
+   503 would be a worse defect than the leak it would hide, since it would
+   mean this function absorbs the process's own shutdown signal. The reach is
+   narrow in practice: this service's Dockerfile runs `uvicorn`, which
+   installs its own `SIGINT` handling, and `fetch_pass` is fully synchronous,
+   so an `asyncio.CancelledError` (itself a `BaseException` subclass) cannot
+   interrupt it mid-call either. What remains is a runner that leaves
+   Python's default `SIGINT` handler in place, combined with a capture tool
+   that records `BaseException` and not only `Exception` -- accepted, not
+   fixed, because the fix on offer is strictly worse than the exposure.
 """
 
 import requests

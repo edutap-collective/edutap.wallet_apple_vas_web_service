@@ -163,3 +163,20 @@ def test_the_message_names_the_failing_exception_class(settings, requests_mock):
     requests_mock.get(EXPECTED_URL, exc=requests.ConnectTimeout("boom"))
     with pytest.raises(ProducerError, match="ConnectTimeout"):
         fetch_pass(settings, PTID, SERIAL)
+
+
+def test_a_keyboard_interrupt_is_not_swallowed(settings, requests_mock):
+    """Pins the round-5 decision not to widen the catch to `except BaseException:`.
+
+    `KeyboardInterrupt` is deliberately not caught by `fetch_pass` -- see the
+    module docstring's second named exception to the no-leak property.
+    `except Exception:` does not match it, so it propagates unmodified rather
+    than becoming a `ProducerError`/503. If this test starts failing because
+    `fetch_pass` began catching it, that is exactly the "fix" the module
+    docstring argues against: swallowing a process shutdown signal is a worse
+    defect than the narrow, low-severity leak it would hide. This test exists
+    so that change cannot happen silently.
+    """
+    requests_mock.get(EXPECTED_URL, exc=KeyboardInterrupt("interrupted"))
+    with pytest.raises(KeyboardInterrupt):
+        fetch_pass(settings, PTID, SERIAL)

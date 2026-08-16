@@ -11,6 +11,7 @@ from edutap.wallet_apple.settings import Settings as WalletAppleSettings
 from pydantic import Field, HttpUrl, SecretStr
 from pydantic.fields import FieldInfo
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
+from sqlalchemy import URL as SQLAlchemyURL
 
 
 class FileSecretsSource(PydanticBaseSettingsSource):
@@ -96,12 +97,29 @@ class DatabaseSettings(_FileAwareSettings):
     username: str | None = None
     password: SecretStr | None = None
 
-    def url(self) -> str:
-        """Return the SQLAlchemy URL for these settings."""
-        port = f":{self.port}" if self.port != 5432 else ""
-        password = self.password.get_secret_value() if self.password is not None else None
-        return (
-            f"{self.type}+{self.driver}://{self.username}:{password}@{self.host}{port}/{self.name}"
+    def url(self) -> SQLAlchemyURL:
+        """Return the SQLAlchemy connection URL for these settings.
+
+        A `sqlalchemy.URL` object, not an f-string DSN: `URL.__repr__` and
+        `__str__` mask the password by default
+        (`render_as_string(hide_password=True)`), the same way `SecretStr`
+        does for the fields above. An f-string DSN is the plaintext password
+        *as* the value, with nothing to mask it -- measured: passing one
+        straight to `create_engine` put it in clear text as a local in three
+        frames, including two of SQLAlchemy's own, the moment the URL failed
+        to parse. `URL` is hashable, so `get_engine`'s `lru_cache` still
+        works with it as the key. `port=None` when the port is the default
+        (`5432`), not `self.port` unconditionally: `URL.create` omits a
+        `None` port from the rendered string, matching what the previous
+        f-string did by omission.
+        """
+        return SQLAlchemyURL.create(
+            drivername=f"{self.type}+{self.driver}",
+            username=self.username,
+            password=self.password.get_secret_value() if self.password is not None else None,
+            host=self.host,
+            port=self.port if self.port != 5432 else None,
+            database=self.name,
         )
 
 
