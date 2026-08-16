@@ -4,9 +4,14 @@ Uses two independent sessions on the module `engine` fixture, not `db_session`:
 `db_session` shares one connection and one transaction across the whole test, so
 it cannot express two overlapping, independently-committing transactions at all.
 Both sessions here commit for real, so this test cleans up its own rows.
+
+The routes are called directly from two threads, which is what FastAPI itself
+does with them: they are `def`, not `async def`, so the framework hands each one
+to its threadpool (see `service.py`'s module docstring). This test used to wrap
+each call in `asyncio.run`, which was the right shape while they were
+coroutines and is a `TypeError` now.
 """
 
-import asyncio
 import threading
 import time
 
@@ -58,16 +63,14 @@ def test_unregistering_the_last_pass_does_not_lose_a_concurrent_registration(eng
 
     try:
         # Seed the device with the one registration `session_a` is about to remove.
-        asyncio.run(
-            service.register_pass(
-                deviceLibraryIdentifier=DEVICE,
-                passTypeIdentifier=PTID,
-                serialNumber=UNREGISTERING,
-                authorization=_auth(UNREGISTERING),
-                data=AppleWalletWebServiceAuthorizationPayload(pushToken="a-push-token"),
-                settings=SETTINGS,
-                session=setup_session,
-            )
+        service.register_pass(
+            deviceLibraryIdentifier=DEVICE,
+            passTypeIdentifier=PTID,
+            serialNumber=UNREGISTERING,
+            authorization=_auth(UNREGISTERING),
+            data=AppleWalletWebServiceAuthorizationPayload(pushToken="a-push-token"),
+            settings=SETTINGS,
+            session=setup_session,
         )
 
         lock_acquired = threading.Event()
@@ -85,15 +88,13 @@ def test_unregistering_the_last_pass_does_not_lose_a_concurrent_registration(eng
 
         def run_unregister() -> None:
             try:
-                asyncio.run(
-                    service.unregister_pass(
-                        deviceLibraryIdentifier=DEVICE,
-                        passTypeIdentifier=PTID,
-                        serialNumber=UNREGISTERING,
-                        authorization=_auth(UNREGISTERING),
-                        settings=SETTINGS,
-                        session=session_a,
-                    )
+                service.unregister_pass(
+                    deviceLibraryIdentifier=DEVICE,
+                    passTypeIdentifier=PTID,
+                    serialNumber=UNREGISTERING,
+                    authorization=_auth(UNREGISTERING),
+                    settings=SETTINGS,
+                    session=session_a,
                 )
             except BaseException as exc:  # noqa: BLE001 -- surfaced via unregister_errors
                 unregister_errors.append(exc)
@@ -112,18 +113,14 @@ def test_unregistering_the_last_pass_does_not_lose_a_concurrent_registration(eng
 
             def run_register() -> None:
                 try:
-                    asyncio.run(
-                        service.register_pass(
-                            deviceLibraryIdentifier=DEVICE,
-                            passTypeIdentifier=PTID,
-                            serialNumber=REGISTERING,
-                            authorization=_auth(REGISTERING),
-                            data=AppleWalletWebServiceAuthorizationPayload(
-                                pushToken="b-push-token"
-                            ),
-                            settings=SETTINGS,
-                            session=session_b,
-                        )
+                    service.register_pass(
+                        deviceLibraryIdentifier=DEVICE,
+                        passTypeIdentifier=PTID,
+                        serialNumber=REGISTERING,
+                        authorization=_auth(REGISTERING),
+                        data=AppleWalletWebServiceAuthorizationPayload(pushToken="b-push-token"),
+                        settings=SETTINGS,
+                        session=session_b,
                     )
                 except BaseException as exc:  # noqa: BLE001 -- surfaced via register_errors
                     register_errors.append(exc)

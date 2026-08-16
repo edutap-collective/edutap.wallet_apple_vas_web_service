@@ -1,4 +1,21 @@
-"""The Apple Wallet web service endpoints: register, list, deliver, unregister, log."""
+"""The Apple Wallet web service endpoints: register, list, deliver, unregister, log.
+
+**None of the five routes is `async def`, and that is deliberate.** Every one of
+them does blocking work -- psycopg2 through SQLModel in all five, and
+`requests.get` to the producer in `send_updated_pass`. FastAPI runs a sync route
+in a threadpool and an `async def` route body on the event loop itself, so an
+`async def` here would let one unreachable producer stall *every* request that
+worker is serving, for up to `producer_timeout_seconds`. A fleet of devices
+fetching after a push is exactly this route's load, so that is the ordinary case
+rather than an edge one.
+
+The proper async rework -- an async driver, an async HTTP client -- is a
+separate piece of work (see the design document's open points). Until it lands,
+the word `async` is what would be wrong here, not what is missing. Anything
+added to these bodies has to stay blocking-friendly; the moment one of them
+needs to `await`, the whole route has to move to a genuinely async stack rather
+than gain an `async` keyword.
+"""
 
 import logging
 from contextlib import asynccontextmanager
@@ -139,7 +156,7 @@ def _insert_registration_if_absent(
 
 
 @router.post("/devices/{deviceLibraryIdentifier}/registrations/{passTypeIdentifier}/{serialNumber}")
-async def register_pass(
+def register_pass(
     deviceLibraryIdentifier: str,
     passTypeIdentifier: str,
     serialNumber: str,
@@ -204,7 +221,7 @@ def _cursor(*candidates: str | None) -> int | None:
 
 
 @router.get("/devices/{deviceLibraryIdentifier}/registrations/{passTypeIdentifier}")
-async def list_updatable_passes(
+def list_updatable_passes(
     deviceLibraryIdentifier: str,
     passTypeIdentifier: str,
     passesUpdatedSince: str | None = None,
@@ -261,7 +278,7 @@ async def list_updatable_passes(
 
 
 @router.get("/passes/{passTypeIdentifier}/{serialNumber}")
-async def send_updated_pass(
+def send_updated_pass(
     passTypeIdentifier: str,
     serialNumber: str,
     authorization: Annotated[str | None, Header()] = None,
@@ -321,7 +338,7 @@ async def send_updated_pass(
 @router.delete(
     "/devices/{deviceLibraryIdentifier}/registrations/{passTypeIdentifier}/{serialNumber}"
 )
-async def unregister_pass(
+def unregister_pass(
     deviceLibraryIdentifier: str,
     passTypeIdentifier: str,
     serialNumber: str,
@@ -391,7 +408,7 @@ async def unregister_pass(
 
 
 @router.post("/log")
-async def device_log(
+def device_log(
     request: Request,
     data: LogEntries,
 ):
