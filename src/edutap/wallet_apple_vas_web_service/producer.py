@@ -34,6 +34,12 @@ What makes that true, mechanism by mechanism:
   the `except`, then raise after it, with no exception being handled at that
   point, so the original is genuinely absent from the new exception's object
   graph rather than merely hidden from it.
+- The `str.format` on the URL template: a template this deployment got
+  wrong raises `KeyError`/`IndexError`/`ValueError` from a frame that is
+  `fetch_pass`'s own, and the exception is not chained out of the `except`
+  either. Its own exposure is small -- a `KeyError` names a placeholder,
+  not a value -- but the file keeps one rule rather than two, and a
+  reader should not have to work out which raise sites are covered.
 - Not only `requests.RequestException`: `requests.get` can also raise a
   plain exception from underneath it -- measured, a non-positive
   `producer_timeout_seconds` reaches a bare `ValueError` in `urllib3`, before

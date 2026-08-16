@@ -177,6 +177,31 @@ def test_the_token_never_becomes_a_frame_local_on_a_producer_error(
         assert not isinstance(local_value, (requests.Response, requests.PreparedRequest))
 
 
+def test_the_template_guard_leaks_nothing_and_chains_nothing():
+    """The sixth raise site, held to the same property as the other five.
+
+    Added with the `.format()` guard, so the module docstring's claim covers
+    every raise in `fetch_pass` rather than the ones that existed when it was
+    written. The template path never reaches `_get`, so no header dict exists
+    to leak -- what it must not do is chain the `KeyError`, whose traceback
+    holds this frame, and it must not put the bearer token in a local's
+    `repr()` (`settings` is bound here, masked by `SecretStr`).
+    """
+    settings = AppleWalletWebServiceSettings(
+        producer_pass_url_template="https://builder.invalid/passes/{unknown_placeholder}",
+        producer_api_token="a-producer-token",
+    )
+    with pytest.raises(ProducerError) as excinfo:
+        fetch_pass(settings, PTID, SERIAL)
+
+    assert excinfo.value.__context__ is None
+    assert excinfo.value.__cause__ is None
+
+    frame = _fetch_pass_frame(excinfo.value.__traceback__)
+    for local_value in frame.f_locals.values():
+        assert "a-producer-token" not in repr(local_value)
+
+
 @pytest.mark.parametrize(
     "exc",
     [
