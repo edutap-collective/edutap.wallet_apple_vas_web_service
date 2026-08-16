@@ -90,13 +90,23 @@ def _upsert_device(session: Session, device_library_identifier: str, push_token:
     one. A check-then-act would let the loser of that race hit an unhandled
     `IntegrityError` on `commit()` and turn into a bare 500 instead of taking
     the row it should have updated.
+
+    `updated_at` is set explicitly, and it has to be. The column carries both a
+    Python-side default and a server-side one, and neither of them fires here:
+    SQLAlchemy applies a column's `onupdate` on an ORM flush and on a Core
+    `update()`, never inside an `ON CONFLICT` `set_`, and a `server_default`
+    answers for the INSERT alone. Measured before this line existed: after a
+    push-token change, `updated_at` was byte-identical to `created_at` -- so
+    the column said "never touched" about the one event it exists to record.
+    See `db_models._timestamp`, which carries the same warning and was copied
+    without it.
     """
     statement = (
         pg_insert(Device.__table__)
         .values(device_library_identifier=device_library_identifier, push_token=push_token)
         .on_conflict_do_update(
             index_elements=["device_library_identifier"],
-            set_={"push_token": push_token},
+            set_={"push_token": push_token, "updated_at": sa.func.now()},
         )
     )
     session.execute(statement)

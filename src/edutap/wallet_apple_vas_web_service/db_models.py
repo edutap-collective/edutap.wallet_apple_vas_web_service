@@ -22,7 +22,24 @@ def _utcnow() -> datetime:
 
 
 def _timestamp(on_update: bool = False) -> sa.Column:
-    """A timestamptz column whose value the database computes."""
+    """A timestamptz column whose value the database computes.
+
+    `server_default` makes the *insert* independent of the writer: a row created
+    by plain SQL gets its timestamp without anyone naming it. That is why both a
+    Python-side default (`default_factory=_utcnow` on the field) and a
+    server-side one exist -- they answer for two different writers, the ORM and
+    everything that is not the ORM.
+
+    `on_update` is weaker than it looks, and the difference is what this
+    package's `_upsert_device` got wrong. It is SQLAlchemy's `onupdate`, so the
+    `now()` call is rendered into an UPDATE that SQLAlchemy itself issues --
+    there is no trigger on the column. An `INSERT ... ON CONFLICT DO UPDATE`
+    written by hand, which is how every upsert in `service.py` writes, leaves
+    the old value in place unless it sets the column explicitly.
+
+    The wording is `edutap.db_definitions`' own, on its `_timestamp()` helper.
+    It was there to be read before this package copied the helper without it.
+    """
     kwargs: dict[str, object] = {"server_default": sa.func.now()}
     if on_update:
         kwargs["onupdate"] = sa.func.now()

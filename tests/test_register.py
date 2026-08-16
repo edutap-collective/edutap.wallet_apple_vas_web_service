@@ -49,6 +49,47 @@ def test_a_repeated_registration_refreshes_the_push_token(client: TestClient, db
     assert db_session.get(Device, DEVICE).push_token == "the-second-token"
 
 
+def test_a_repeated_registration_bumps_the_devices_updated_at(engine):
+    """The push-token change has to be visible in `updated_at`, not only in the token.
+
+    Two real transactions, on the `engine` fixture rather than through
+    `client`/`db_session`, and that is forced by what `now()` means:
+    PostgreSQL's `now()` is the *transaction's* start time, constant for its
+    whole duration. `db_session` runs an entire test inside one outer
+    transaction, so two upserts through it would read back the same timestamp
+    however correct the code is -- the test would pass against the defect it is
+    written to catch. In production each request is its own transaction, which
+    is what these two `Session` blocks reproduce.
+
+    A device of its own, cleaned up here: the `engine` fixture is module-scoped
+    and these two commits are real, so a leftover row would be visible to every
+    other test in this module.
+    """
+    from sqlmodel import Session
+
+    from edutap.wallet_apple_vas_web_service.service import _upsert_device
+
+    device_id = "updated-at-device"
+    try:
+        with Session(engine) as session:
+            _upsert_device(session, device_id, "the-first-token")
+            session.commit()
+        with Session(engine) as session:
+            _upsert_device(session, device_id, "the-second-token")
+            session.commit()
+
+        with Session(engine) as session:
+            device = session.get(Device, device_id)
+            assert device.push_token == "the-second-token"
+            assert device.updated_at > device.created_at
+    finally:
+        with Session(engine) as session:
+            leftover = session.get(Device, device_id)
+            if leftover is not None:
+                session.delete(leftover)
+                session.commit()
+
+
 def test_a_wrong_token_answers_401(client: TestClient):
     response = client.post(
         _url(), headers={"Authorization": "ApplePass wrong"}, json={"pushToken": "t"}
