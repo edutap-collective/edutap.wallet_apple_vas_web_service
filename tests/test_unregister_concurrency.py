@@ -100,43 +100,63 @@ def test_unregistering_the_last_pass_does_not_lose_a_concurrent_registration(eng
 
         thread_a = threading.Thread(target=run_unregister)
         thread_a.start()
-        assert lock_acquired.wait(timeout=5), "session_a never reached its commit"
+        # However this function exits from here on -- assertion failure or not --
+        # `session_a` must be released and `thread_a` joined, or a failing test
+        # leaves a thread parked forever on `let_a_continue.wait()` while the
+        # outer `finally` closes the session out from under it. That would make
+        # the *next* failure depend on timing luck instead of being deterministic.
+        try:
+            assert lock_acquired.wait(timeout=5), "session_a never reached its commit"
 
-        register_errors: list[BaseException] = []
+            register_errors: list[BaseException] = []
 
-        def run_register() -> None:
-            try:
-                asyncio.run(
-                    service.register_pass(
-                        deviceLibraryIdentifier=DEVICE,
-                        passTypeIdentifier=PTID,
-                        serialNumber=REGISTERING,
-                        authorization=_auth(REGISTERING),
-                        data=AppleWalletWebServiceAuthorizationPayload(pushToken="b-push-token"),
-                        settings=SETTINGS,
-                        session=session_b,
+            def run_register() -> None:
+                try:
+                    asyncio.run(
+                        service.register_pass(
+                            deviceLibraryIdentifier=DEVICE,
+                            passTypeIdentifier=PTID,
+                            serialNumber=REGISTERING,
+                            authorization=_auth(REGISTERING),
+                            data=AppleWalletWebServiceAuthorizationPayload(
+                                pushToken="b-push-token"
+                            ),
+                            settings=SETTINGS,
+                            session=session_b,
+                        )
                     )
+                except BaseException as exc:  # noqa: BLE001 -- surfaced via register_errors
+                    register_errors.append(exc)
+
+            thread_b = threading.Thread(target=run_register)
+            thread_b.start()
+            try:
+                # A settle delay, not a synchronization point: correctness does
+                # not depend on its length, only on session_a having reached the
+                # lock beforehand (already guaranteed by `lock_acquired.wait()`
+                # above). Its purpose is to give session_b time to actually
+                # reach and block on the device row -- the assertions right
+                # after turn that expectation into checked facts.
+                time.sleep(0.3)
+                # Checked first: if `run_register` raised before it ever
+                # reached the database, `thread_b` dies on its own and
+                # `is_alive()` below would read as "the lock is blocking it" --
+                # the wrong cause, with the real one sitting unexamined here.
+                assert not register_errors, (
+                    f"register_pass raised before contending for the device "
+                    f"lock: {register_errors!r}"
                 )
-            except BaseException as exc:  # noqa: BLE001 -- surfaced via register_errors
-                register_errors.append(exc)
-
-        thread_b = threading.Thread(target=run_register)
-        thread_b.start()
-
-        # A settle delay, not a synchronization point: correctness does not depend
-        # on its length, only on session_a having reached the lock beforehand
-        # (already guaranteed by the `lock_acquired.wait()` above). Its purpose is
-        # to give session_b time to actually reach and block on the device row --
-        # the assertion right after turns that expectation into a checked fact.
-        time.sleep(0.3)
-        assert thread_b.is_alive(), (
-            "session_b finished before session_a released the device lock -- "
-            "with_for_update is not blocking the concurrent registration"
-        )
-
-        let_a_continue.set()
-        thread_a.join(timeout=5)
-        thread_b.join(timeout=5)
+                assert thread_b.is_alive(), (
+                    "session_b finished before session_a released the device "
+                    "lock -- with_for_update is not blocking the concurrent "
+                    "registration"
+                )
+            finally:
+                let_a_continue.set()
+                thread_b.join(timeout=5)
+        finally:
+            let_a_continue.set()
+            thread_a.join(timeout=5)
 
         assert not unregister_errors, f"unregister_pass raised: {unregister_errors!r}"
         assert not register_errors, f"register_pass raised: {register_errors!r}"
