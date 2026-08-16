@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from edutap.wallet_apple.settings import Settings as WalletAppleSettings
-from pydantic import Field, HttpUrl
+from pydantic import Field, HttpUrl, SecretStr
 from pydantic.fields import FieldInfo
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
@@ -103,7 +103,25 @@ class AppleWalletWebServiceSettings(_FileAwareSettings):
     log_file_path: Path = Path("/") / "var" / "log" / "wallet_apple_vas_web_service"
 
     url: HttpUrl | None = None
-    authentication_token: str | None = None
+    authentication_secret: SecretStr | None = None
+    """The issuer secret every pass token is derived from.
+
+    One value, shared with the producer that builds the passes. Arrives from the
+    vault, or as a Docker secret through the `_FILE` convention above.
+    """
+
+    previous_authentication_secrets: list[SecretStr] = Field(default_factory=list)
+    """Secrets rotated away from, newest first.
+
+    Apple: "there may still be devices with the old pass and the old
+    authentication token. Your server would have to check the authentication
+    token against the list of every token that has ever been valid." A pass
+    picks up the new token at its next rebuild; until then its device
+    authenticates with an entry from this list.
+
+    From the environment as a JSON array, which is how pydantic-settings parses
+    a complex type: `["older-secret", "oldest-secret"]`.
+    """
 
     bootstrap_servers: str | None = None
     topic: str | None = None
@@ -113,6 +131,11 @@ class AppleWalletWebServiceSettings(_FileAwareSettings):
     # error would surface as an import failure rather than at the call that reads it.
     apple: WalletAppleSettings = Field(default_factory=WalletAppleSettings)
     db: DatabaseSettings = Field(default_factory=DatabaseSettings)
+
+    def accepted_secrets(self) -> list[str]:
+        """Return every secret a presented token may have been derived from."""
+        secrets = [self.authentication_secret, *self.previous_authentication_secrets]
+        return [secret.get_secret_value() for secret in secrets if secret is not None]
 
 
 def get_settings() -> AppleWalletWebServiceSettings:
