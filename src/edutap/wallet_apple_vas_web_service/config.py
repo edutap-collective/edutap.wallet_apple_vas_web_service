@@ -87,6 +87,14 @@ class DatabaseSettings(_FileAwareSettings):
     username: str | None = None
     password: str | None = None
 
+    def url(self) -> str:
+        """Return the SQLAlchemy URL for these settings."""
+        port = f":{self.port}" if self.port != 5432 else ""
+        return (
+            f"{self.type}+{self.driver}://{self.username}:{self.password}"
+            f"@{self.host}{port}/{self.name}"
+        )
+
 
 class AppleWalletWebServiceSettings(_FileAwareSettings):
     """Settings of the Apple Wallet web service, prefix
