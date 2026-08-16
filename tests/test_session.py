@@ -1,17 +1,76 @@
 """The session dependency creates no schema."""
 
-import inspect
+import contextlib
+import os
+
+import pytest
+import sqlalchemy as sa
 
 from edutap.wallet_apple_vas_web_service import session
 
+# Kept in sync with `conftest.DSN_VARIABLE` by hand rather than imported: `tests/`
+# has no `__init__.py`, so it is not reliably importable as a package.
+DSN_VARIABLE = "WALLET_APPLE_VAS_WEB_SERVICE_TEST_DSN"
 
-def test_the_request_path_issues_no_ddl():
-    # DDL belongs to the migration container. `create_all` on a request meant
-    # every request raced every other one, and it made the service the owner of
-    # a schema it is only a user of.
-    source = inspect.getsource(session)
-    assert "create_all" not in source
-    assert "drop_all" not in source
+
+@pytest.mark.integration
+def test_get_session_issues_no_ddl(monkeypatch):
+    """Driving `get_session()` against a real database emits no DDL.
+
+    A grep over the module source -- this test's previous shape -- proves
+    nothing: it is satisfied by rewording a comment that merely *describes*
+    DDL (which is exactly what happened while building this task), and it is
+    blind to `Table.create()`, a raw `CREATE TABLE`, or an Alembic call. Only
+    running the dependency and recording what it actually sends to the
+    database proves the request path stays DDL-free.
+
+    This also exercises `get_session()` itself, which nothing else in this
+    suite calls -- only `get_engine` and `DatabaseSettings.url()` in
+    isolation. A typo in the `AppleWalletWebServiceSettings().db.url()`
+    wiring would otherwise not surface until an endpoint calls it in Task 4.
+    """
+    from edutap.wallet_apple_vas_web_service.config import AppleWalletWebServiceSettings
+
+    dsn = os.environ.get(DSN_VARIABLE)
+    if not dsn:
+        pytest.skip(f"{DSN_VARIABLE} is not set")
+    url = sa.engine.make_url(dsn)
+
+    # `get_session()` builds its URL from `AppleWalletWebServiceSettings().db`,
+    # not from the test DSN string directly, so the settings have to be pointed
+    # at the same database through their own environment variables.
+    monkeypatch.setenv("EDUTAP_WALLET_APPLE_VAS_WEB_SERVICE_DB_TYPE", url.get_backend_name())
+    monkeypatch.setenv("EDUTAP_WALLET_APPLE_VAS_WEB_SERVICE_DB_DRIVER", url.get_driver_name())
+    monkeypatch.setenv("EDUTAP_WALLET_APPLE_VAS_WEB_SERVICE_DB_HOST", url.host or "")
+    monkeypatch.setenv("EDUTAP_WALLET_APPLE_VAS_WEB_SERVICE_DB_PORT", str(url.port or 5432))
+    monkeypatch.setenv("EDUTAP_WALLET_APPLE_VAS_WEB_SERVICE_DB_NAME", url.database or "")
+    monkeypatch.setenv("EDUTAP_WALLET_APPLE_VAS_WEB_SERVICE_DB_USERNAME", url.username or "")
+    monkeypatch.setenv("EDUTAP_WALLET_APPLE_VAS_WEB_SERVICE_DB_PASSWORD", url.password or "")
+
+    session.get_engine.cache_clear()
+    engine = session.get_engine(AppleWalletWebServiceSettings().db.url())
+
+    statements: list[str] = []
+
+    def record_statement(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    sa.event.listen(engine, "before_cursor_execute", record_statement)
+    try:
+        generator = session.get_session()
+        db = next(generator)
+        db.execute(sa.text("SELECT 1"))
+        # Exhaust the generator the way FastAPI does when a request ends, so the
+        # `with Session(engine) as session:` block in `get_session()` runs its exit.
+        with contextlib.suppress(StopIteration):
+            next(generator)
+    finally:
+        sa.event.remove(engine, "before_cursor_execute", record_statement)
+        session.get_engine.cache_clear()
+
+    assert statements, "expected at least the SELECT to have been recorded"
+    ddl_prefixes = ("CREATE", "DROP", "ALTER")
+    assert not any(statement.strip().upper().startswith(ddl_prefixes) for statement in statements)
 
 
 def test_the_engine_is_reused_across_calls():
