@@ -107,3 +107,24 @@ def test_the_token_never_becomes_a_frame_local_on_a_producer_error(
     for local_value in frame.f_locals.values():
         assert "a-producer-token" not in repr(local_value)
         assert not isinstance(local_value, (requests.Response, requests.PreparedRequest))
+
+
+def test_a_connection_failure_leaves_no_chain_on_the_raised_error(settings, requests_mock):
+    """`__context__`/`__cause__` genuinely `None`, not merely suppressed.
+
+    `raise ... from None` alone sets `__suppress_context__`, which keeps a
+    *printed* traceback from showing the original `requests.RequestException`
+    -- but `__context__` still points at it, and that exception's own frames
+    still hold the failed request with its headers. `edutap.data_provider`
+    measured that an error tracker sends the full chain regardless of the
+    suppression flag; see the module docstring. Asserting `__context__ is
+    None` is the cheap, exact way to pin that the original is genuinely
+    absent from this exception's object graph, not merely hidden from a
+    rendering of it.
+    """
+    requests_mock.get(EXPECTED_URL, exc=requests.ConnectionError("boom"))
+    with pytest.raises(ProducerError) as excinfo:
+        fetch_pass(settings, PTID, SERIAL)
+
+    assert excinfo.value.__context__ is None
+    assert excinfo.value.__cause__ is None

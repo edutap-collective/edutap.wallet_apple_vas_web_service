@@ -5,16 +5,30 @@ and asks for the current pass by Apple's key alone -- it knows no person, no
 template and no validity, and it resolves nothing at runtime: there is exactly
 one producer per deployment, named in configuration.
 
-The property this module holds throughout: no frame that can appear on a
-raised exception's traceback binds anything from which the producer's bearer
-token is reachable in plain form -- not the header dict, not the
+The property this module holds throughout: no frame reachable from a raised
+exception -- including through `__context__` and `__cause__`, not only the
+exception's own traceback -- binds anything from which the producer's bearer
+token is reachable in plain form. Not the header dict, not the
 `requests.Response` (whose `.request.headers` carries the same token), not a
-`PreparedRequest`. Every raise in `fetch_pass` happens from a frame that has,
-at most, primitives in scope plus `settings` itself: a URL built from
-non-secret settings, an HTTP status code, and the pass bytes it is this
-function's job to return anyway. `settings` is unavoidably a local at every
-raise site -- it is the function's own parameter -- but it holds the token
-behind a `SecretStr`, which is pydantic's own answer to the same threat: its
+`PreparedRequest`, and not the original `requests.RequestException` itself:
+`raise ... from None` only sets `__suppress_context__`, which keeps a printed
+traceback from showing the chained exception -- `__context__` still points at
+it, and its own frames still hold the failed request. That is measured, not
+assumed: `edutap.data_provider`'s `api/routers.py` and `api/app.py` record an
+error tracker that sends the full `__cause__` chain regardless of the
+suppression flag, and both close it the same way this module now does --
+capture what is safe to know inside the `except`, then raise after it, with
+no exception being handled at that point, so the original is genuinely
+absent from the new exception's object graph rather than merely hidden from
+it. The cost, accepted there and here for the same reason: the traceback no
+longer shows which call inside the `try` failed.
+
+Every raise in `fetch_pass` happens from a frame that has, at most,
+primitives in scope plus `settings` itself: a URL built from non-secret
+settings, an HTTP status code, and the pass bytes it is this function's job
+to return anyway. `settings` is unavoidably a local at every raise site -- it
+is the function's own parameter -- but it holds the token behind a
+`SecretStr`, which is pydantic's own answer to the same threat: its
 `repr()`/`str()` and its JSON dump are masked, so it does not hand the token
 to a generic serializer either. Reaching it from `settings` needs an explicit
 `.get_secret_value()` call, not passive introspection.
@@ -71,18 +85,20 @@ def fetch_pass(
         pass_type_identifier=pass_type_identifier, serial_number=serial_number
     )
 
+    # `result` stays `None` on a `RequestException`; nothing about the failure
+    # is captured, because the constant message below needs nothing dynamic
+    # -- unlike `data_provider`'s `_describe`, which does have safe facts
+    # worth recording. Whichever branch runs, the raise for it happens after
+    # this block, not inside the `except`: see the module docstring for why.
+    result: tuple[int, bytes] | None = None
     try:
-        status_code, content = _get(
-            url, _producer_headers(settings), settings.producer_timeout_seconds
-        )
+        result = _get(url, _producer_headers(settings), settings.producer_timeout_seconds)
     except requests.RequestException:
-        # The URL is not repeated in the message: it is built from settings that
-        # carry no secret, but the exception travels into logs and error
-        # trackers, and the token is in the headers of the request object the
-        # original exception references. `from None` suppresses that chained
-        # exception's traceback; this frame never bound the headers or a
-        # response to begin with -- see the module docstring.
-        raise ProducerError("The producer is not reachable.") from None
+        pass
+
+    if result is None:
+        raise ProducerError("The producer is not reachable.")
+    status_code, content = result
 
     if status_code in (404, 410):
         raise PassNotAvailable(f"The producer does not serve {serial_number!r}.")
