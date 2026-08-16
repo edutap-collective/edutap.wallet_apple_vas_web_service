@@ -41,3 +41,18 @@ def test_update_tag_sequence_is_created_with_the_schema():
     assert isinstance(db_models.UPDATE_TAG_SEQUENCE, sa.Sequence)
     assert db_models.UPDATE_TAG_SEQUENCE.schema == SCHEMA
     assert db_models.UPDATE_TAG_SEQUENCE.metadata is metadata
+
+
+def test_owned_schemas_is_what_the_tables_actually_say():
+    """`OWNED_SCHEMAS` is written down; the tables are what it has to describe.
+
+    It is the bound `env.py` draws around autogenerate, so a table that later
+    declares a schema of its own would fall outside it silently -- autogenerate
+    would stop seeing that table and propose creating it on every run, and
+    `VERSION_TABLE_SCHEMA` would no longer be the only candidate it claims to
+    be.
+    """
+    from edutap.wallet_apple_vas_web_service import dbdef
+
+    assert dbdef.OWNED_SCHEMAS == {table.schema for table in metadata.tables.values()}
+    assert dbdef.VERSION_TABLE_SCHEMA in dbdef.OWNED_SCHEMAS

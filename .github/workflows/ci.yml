@@ -40,8 +40,8 @@ jobs:
           python-version: "3.13"
       - run: uv venv
       - run: uv pip install -e ".[fastapi,sql]" --group dev
-      - run: .venv/bin/python -m ruff check src tests
-      - run: .venv/bin/python -m ruff format --check src tests
+      - run: .venv/bin/python -m ruff check src tests migrations
+      - run: .venv/bin/python -m ruff format --check src tests migrations
       # Reported, not enforced -- see the `typecheck` target in the Makefile for
       # why. The output belongs in the log of every run; the exit code does not
       # belong in the gate until the known defects are worked off.
@@ -60,3 +60,12 @@ jobs:
         run: |
           docker run --rm edutap-wallet-apple-vas-web-service:ci \
             python -c "import edutap.wallet_apple_vas_web_service.standalone"
+      # The deployment runs `alembic upgrade head` out of this image before the
+      # service starts. `heads` reads the script directory and opens no
+      # connection, so it proves in a second what a missing COPY would
+      # otherwise reveal only during a deploy: alembic installed, alembic.ini
+      # and migrations/ present, and the revision file importable.
+      - name: The migrations are in the image
+        run: |
+          docker run --rm --workdir /app edutap-wallet-apple-vas-web-service:ci \
+            alembic -c /app/alembic.ini heads

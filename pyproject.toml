@@ -49,6 +49,15 @@ dependencies = [
     # different image.
     "edutap.wallet_apple==1.0.0a5",
     "requests==2.34.2",
+    # Runtime, not a development dependency: `migrations/` is how this package's
+    # tables come into existence, and `alembic upgrade head` is run in operation
+    # -- by the deployment, out of this same image, under a role that has CREATE
+    # (see `app_roles/stack_edutap/tasks/migrate.yml` in `ansible-app-server`,
+    # which runs each package's own migrations from the package's own image).
+    #
+    # >=1.16 would be the floor for the `module` post-write hook type alembic.ini
+    # registers; the pin is exact for the same reason every other pin here is.
+    "alembic==1.19.1",
 ]
 
 [project.optional-dependencies]
