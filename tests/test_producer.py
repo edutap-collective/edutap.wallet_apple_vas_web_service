@@ -72,6 +72,9 @@ def _fetch_pass_frame(traceback):
     "mock_kwargs",
     [
         pytest.param({"exc": requests.ConnectionError("boom")}, id="connection-failure"),
+        pytest.param(
+            {"exc": ValueError("timeout value out of bounds")}, id="non-request-exception"
+        ),
         pytest.param({"status_code": 404}, id="withdrawn-404"),
         pytest.param({"status_code": 410}, id="withdrawn-410"),
         pytest.param({"status_code": 500}, id="producer-failure"),
@@ -80,7 +83,7 @@ def _fetch_pass_frame(traceback):
 def test_the_token_never_becomes_a_frame_local_on_a_producer_error(
     settings, requests_mock, mock_kwargs
 ):
-    """The property the module docstring states, pinned structurally, on all three raises.
+    """The property the module docstring states, pinned structurally, on all five raises.
 
     Two independent checks, because the token is reachable from a local in two
     different shapes and only one of them is a string match:
@@ -98,6 +101,13 @@ def test_the_token_never_becomes_a_frame_local_on_a_producer_error(
       would -- this is the shape the second fix closed, and a `repr()`-only
       check would pass against it by accident, same as the message-string
       check it replaces.
+
+    `non-request-exception` uses a bare `ValueError`, not a
+    `requests.RequestException` subclass -- the shape `requests.get(timeout=0)`
+    actually raises (measured), and the shape the fourth fix closed. Before
+    that fix, `except requests.RequestException:` did not catch it at all, so
+    it escaped `fetch_pass` with `_get`'s frame (and `requests`' own internal
+    frames) still attached, `headers` and all.
     """
     requests_mock.get(EXPECTED_URL, **mock_kwargs)
     with pytest.raises(ProducerError) as excinfo:
@@ -109,22 +119,47 @@ def test_the_token_never_becomes_a_frame_local_on_a_producer_error(
         assert not isinstance(local_value, (requests.Response, requests.PreparedRequest))
 
 
-def test_a_connection_failure_leaves_no_chain_on_the_raised_error(settings, requests_mock):
-    """`__context__`/`__cause__` genuinely `None`, not merely suppressed.
+@pytest.mark.parametrize(
+    "exc",
+    [
+        pytest.param(requests.ConnectionError("boom"), id="connection-failure"),
+        pytest.param(ValueError("timeout value out of bounds"), id="non-request-exception"),
+    ],
+)
+def test_a_failed_request_leaves_no_chain_on_the_raised_error(settings, requests_mock, exc):
+    """`__context__`/`__cause__` genuinely `None`, not merely suppressed -- for either shape.
 
     `raise ... from None` alone sets `__suppress_context__`, which keeps a
-    *printed* traceback from showing the original `requests.RequestException`
-    -- but `__context__` still points at it, and that exception's own frames
-    still hold the failed request with its headers. `edutap.data_provider`
-    measured that an error tracker sends the full chain regardless of the
-    suppression flag; see the module docstring. Asserting `__context__ is
-    None` is the cheap, exact way to pin that the original is genuinely
-    absent from this exception's object graph, not merely hidden from a
-    rendering of it.
+    *printed* traceback from showing the original exception -- but
+    `__context__` still points at it, and that exception's own frames still
+    hold the failed request with its headers. `edutap.data_provider` measured
+    that an error tracker sends the full chain regardless of the suppression
+    flag; see the module docstring. Asserting `__context__ is None` is the
+    cheap, exact way to pin that the original is genuinely absent from this
+    exception's object graph, not merely hidden from a rendering of it -- for
+    a `RequestException` and for the exception class outside that family the
+    fourth fix started catching too.
     """
-    requests_mock.get(EXPECTED_URL, exc=requests.ConnectionError("boom"))
+    requests_mock.get(EXPECTED_URL, exc=exc)
     with pytest.raises(ProducerError) as excinfo:
         fetch_pass(settings, PTID, SERIAL)
 
     assert excinfo.value.__context__ is None
     assert excinfo.value.__cause__ is None
+
+
+def test_the_message_names_the_failing_exception_class(settings, requests_mock):
+    """The one fact kept for an operator: which exception class failed, not a constant message.
+
+    `except requests.RequestException: pass` (the shape introduced while
+    closing the `__context__` leak) made a DNS-dead producer and a
+    reachable-but-TLS-broken one indistinguishable in the raised message --
+    a real diagnosability regression, even though it carried no credential.
+    `data_provider`'s pattern explicitly permits recording what an operator
+    needs inside the `except`; it only forbids carrying the exception itself
+    out. A class name identifies neither this deployment's producer nor its
+    credential, so it is safe to keep.
+    """
+    requests_mock.get(EXPECTED_URL, exc=requests.ConnectTimeout("boom"))
+    with pytest.raises(ProducerError, match="ConnectTimeout"):
+        fetch_pass(settings, PTID, SERIAL)

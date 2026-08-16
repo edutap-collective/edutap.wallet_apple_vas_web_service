@@ -5,33 +5,61 @@ and asks for the current pass by Apple's key alone -- it knows no person, no
 template and no validity, and it resolves nothing at runtime: there is exactly
 one producer per deployment, named in configuration.
 
-The property this module holds throughout: no frame reachable from a raised
-exception -- including through `__context__` and `__cause__`, not only the
-exception's own traceback -- binds anything from which the producer's bearer
-token is reachable in plain form. Not the header dict, not the
-`requests.Response` (whose `.request.headers` carries the same token), not a
-`PreparedRequest`, and not the original `requests.RequestException` itself:
-`raise ... from None` only sets `__suppress_context__`, which keeps a printed
-traceback from showing the chained exception -- `__context__` still points at
-it, and its own frames still hold the failed request. That is measured, not
-assumed: `edutap.data_provider`'s `api/routers.py` and `api/app.py` record an
-error tracker that sends the full `__cause__` chain regardless of the
-suppression flag, and both close it the same way this module now does --
-capture what is safe to know inside the `except`, then raise after it, with
-no exception being handled at that point, so the original is genuinely
-absent from the new exception's object graph rather than merely hidden from
-it. The cost, accepted there and here for the same reason: the traceback no
-longer shows which call inside the `try` failed.
+The property this module aims to hold, stated precisely rather than rounded
+up -- an earlier version of this docstring overclaimed it, which is exactly
+the failure mode this comment now exists to prevent a reader from repeating:
 
-Every raise in `fetch_pass` happens from a frame that has, at most,
-primitives in scope plus `settings` itself: a URL built from non-secret
-settings, an HTTP status code, and the pass bytes it is this function's job
-to return anyway. `settings` is unavoidably a local at every raise site -- it
-is the function's own parameter -- but it holds the token behind a
-`SecretStr`, which is pydantic's own answer to the same threat: its
-`repr()`/`str()` and its JSON dump are masked, so it does not hand the token
-to a generic serializer either. Reaching it from `settings` needs an explicit
-`.get_secret_value()` call, not passive introspection.
+    No frame reachable from a raised exception -- through its own traceback,
+    or through `__context__`/`__cause__` -- binds the producer's bearer token
+    or the database password in a form a generic `repr()`-based capture tool
+    would expose.
+
+What makes that true, mechanism by mechanism:
+
+- The header dict, and the `requests.Response`/`PreparedRequest` whose
+  `.request.headers` carries the same token: never bound in `fetch_pass`'s
+  own frame at all (`_producer_headers`, `_get`).
+- The original exception `requests.get` raises: `raise ... from None` alone
+  is not enough -- it only sets `__suppress_context__`, which keeps a
+  *printed* traceback from showing the chained exception, but `__context__`
+  still points at it and its own frames still hold the failed request.
+  Measured for this estate, not assumed: `edutap.data_provider`'s
+  `api/routers.py` and `api/app.py` record an error tracker that sends the
+  full `__cause__` chain regardless of the suppression flag. `fetch_pass`
+  closes it the way both of those do -- capture what is safe to know inside
+  the `except`, then raise after it, with no exception being handled at that
+  point, so the original is genuinely absent from the new exception's object
+  graph rather than merely hidden from it.
+- Not only `requests.RequestException`: `requests.get` can also raise a
+  plain exception from underneath it -- measured, a non-positive
+  `producer_timeout_seconds` reaches a bare `ValueError` in `urllib3`, before
+  `requests` itself gets a chance to guard it, and that path is not a
+  `RequestException`. `fetch_pass` catches broadly around the request call
+  for exactly this reason: the positivity constraint on
+  `producer_timeout_seconds` (see `config.py`) removes the one trigger that
+  is known, the broad catch removes the exposure for any trigger that isn't.
+
+The cost of both exception-handling fixes, accepted for the same reason
+`data_provider` accepts it: the traceback no longer shows which call inside
+the `try` failed, and neither does a bare `str(exception)`. `error_type`
+(the failing exception's class name, nothing more) is kept and put in the
+message raised afterward so an operator is not left with a message that
+cannot distinguish a DNS failure from a broken TLS handshake -- see the
+comment in `fetch_pass`.
+
+What the property above does **not** cover, stated rather than left for a
+reader to assume: `settings` is unavoidably a local at every raise site in
+`fetch_pass` -- it is the function's own parameter, carrying both the
+producer's bearer token and (through `settings.db`) the database password.
+Both now sit behind pydantic's `SecretStr`, which defeats `repr()`, `str()`,
+and JSON serialization -- the class of capture this module defends against
+throughout. It does not defeat a tool that walks object attributes looking
+for a `SecretStr` specifically and reads its private `_secret_value`, or
+that calls `.get_secret_value()` itself. That gap is accepted, not closed:
+no code in this codebase treats `SecretStr` as a complete defense against a
+deliberately targeted extraction, only against generic serialization -- and
+`settings` cannot be kept out of `fetch_pass`'s frame the way the header
+dict and the response were, because the function genuinely needs it.
 """
 
 import requests
@@ -62,11 +90,15 @@ def _get(url: str, headers: dict[str, str], timeout: float) -> tuple[int, bytes]
     """Perform the GET and return only the status code and body.
 
     Not a `requests.Response`: its `.request.headers` carries the same bearer
-    token `_producer_headers` built, so returning it would hand the token right
-    back to `fetch_pass` as a local -- undoing the point of not binding
+    token `_producer_headers` built, so returning it would hand the token
+    right back to `fetch_pass` as a local -- undoing the point of not binding
     `headers` there. `response` lives only in this frame, and only for the
-    line that reduces it to primitives; this frame is popped, off any
-    traceback, before `fetch_pass` ever raises on what it decides from them.
+    line that reduces it to primitives.
+
+    This frame's own exception references never survive past `fetch_pass`'s
+    `except Exception:` around the call to this function -- true regardless
+    of what `requests.get` raises, `RequestException` or otherwise, because
+    that catch is broad and does not chain. See the module docstring.
     """
     response = requests.get(url, headers=headers, timeout=timeout)
     return response.status_code, response.content
@@ -85,19 +117,27 @@ def fetch_pass(
         pass_type_identifier=pass_type_identifier, serial_number=serial_number
     )
 
-    # `result` stays `None` on a `RequestException`; nothing about the failure
-    # is captured, because the constant message below needs nothing dynamic
-    # -- unlike `data_provider`'s `_describe`, which does have safe facts
-    # worth recording. Whichever branch runs, the raise for it happens after
-    # this block, not inside the `except`: see the module docstring for why.
+    # Caught broadly, not `except requests.RequestException:`: `requests.get`
+    # can also raise a plain exception from underneath it (a non-positive
+    # `producer_timeout_seconds` is one measured trigger, guarded against in
+    # `config.py`, but not the only conceivable one), and every one of those
+    # exception classes carries the same failed request through its own
+    # frames as a `RequestException` would. `error_type` is the one fact kept
+    # -- a class name, never a value -- so the message below can still tell a
+    # DNS failure from a broken handshake; nothing more is captured, and
+    # nothing is raised inside this block. The raise for either outcome
+    # happens after it, with no exception being handled at that point: see
+    # the module docstring for why that -- not `from None` -- is what keeps
+    # the original genuinely out of the new exception's object graph.
     result: tuple[int, bytes] | None = None
+    error_type: str | None = None
     try:
         result = _get(url, _producer_headers(settings), settings.producer_timeout_seconds)
-    except requests.RequestException:
-        pass
+    except Exception as error:
+        error_type = type(error).__name__
 
     if result is None:
-        raise ProducerError("The producer is not reachable.")
+        raise ProducerError(f"The producer is not reachable ({error_type}).")
     status_code, content = result
 
     if status_code in (404, 410):

@@ -84,15 +84,24 @@ class DatabaseSettings(_FileAwareSettings):
     port: int = 5432
     name: str | None = None
 
+    # `username` stays a plain `str`: it names a role, not a credential, and
+    # does not by itself grant access to anything -- the ordinary distinction
+    # database tooling already relies on (a username routinely shows up in
+    # `pg_stat_activity`, connection logs, and slow-query logs; a password
+    # never should). `password` is the actual credential. It was a plain
+    # `str` here, meaning `repr(settings)` -- and by extension anything that
+    # captures locals or a settings object on an exception -- put it in
+    # clear text; see `producer.py`'s module docstring, which documents this
+    # module for the same threat model on the producer's bearer token.
     username: str | None = None
-    password: str | None = None
+    password: SecretStr | None = None
 
     def url(self) -> str:
         """Return the SQLAlchemy URL for these settings."""
         port = f":{self.port}" if self.port != 5432 else ""
+        password = self.password.get_secret_value() if self.password is not None else None
         return (
-            f"{self.type}+{self.driver}://{self.username}:{self.password}"
-            f"@{self.host}{port}/{self.name}"
+            f"{self.type}+{self.driver}://{self.username}:{password}@{self.host}{port}/{self.name}"
         )
 
 
@@ -145,8 +154,18 @@ class AppleWalletWebServiceSettings(_FileAwareSettings):
     producer_api_token: SecretStr | None = None
     """Bearer token this service presents to its producer."""
 
-    producer_timeout_seconds: float = 10.0
-    """How long to wait for a built pass. Apple's device is waiting behind it."""
+    producer_timeout_seconds: float = Field(10.0, gt=0)
+    """How long to wait for a built pass. Apple's device is waiting behind it.
+
+    `gt=0`, not just a sensible-looking default: a value of `0` (or negative)
+    reaches `urllib3`'s own timeout validation, which raises a plain
+    `ValueError` -- outside the `requests.RequestException` family `producer.py`
+    otherwise handles -- from underneath `requests.get`, before any network
+    call happens. Rejecting the value here removes the one trigger for that
+    path that is known; `producer.py`'s broad `except Exception` around the
+    request call is what closes the path itself, for this and any other
+    exception class not yet identified.
+    """
 
     # ``default_factory`` rather than an instance in the class body, matching ``db``
     # below: an instance here is built while this module is imported, so a settings

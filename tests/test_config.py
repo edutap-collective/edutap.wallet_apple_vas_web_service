@@ -1,9 +1,12 @@
 """Tests for the Apple Wallet web service settings."""
 
 import pytest
-from pydantic import SecretStr
+from pydantic import SecretStr, ValidationError
 
-from edutap.wallet_apple_vas_web_service.config import AppleWalletWebServiceSettings
+from edutap.wallet_apple_vas_web_service.config import (
+    AppleWalletWebServiceSettings,
+    DatabaseSettings,
+)
 
 
 def test_accepted_secrets_without_any_configured():
@@ -82,3 +85,42 @@ def test_previous_authentication_secrets_file_convention(tmp_path, monkeypatch):
     assert len(settings.previous_authentication_secrets) == 2
     assert settings.previous_authentication_secrets[0].get_secret_value() == "older-secret"
     assert settings.previous_authentication_secrets[1].get_secret_value() == "oldest-secret"
+
+
+def test_the_database_password_is_masked_in_repr():
+    """`repr(settings)` must not carry the database password in clear text.
+
+    Measured, before this field was a `SecretStr`: `'db-secret' in
+    repr(settings)` was `True`, and `settings` is bound at every raise site
+    in `producer.py`'s `fetch_pass` -- a strictly easier leak than the
+    producer's bearer token, which took three rounds of fixes to close.
+    """
+    settings = AppleWalletWebServiceSettings(db=DatabaseSettings(password="db-secret"))
+    assert "db-secret" not in repr(settings)
+    assert settings.db.password.get_secret_value() == "db-secret"
+
+
+def test_the_database_username_is_not_masked():
+    """`username` stays a plain `str` -- a deliberate decision, not an oversight.
+
+    It names a role, not a credential, and does not by itself grant access to
+    anything. Pinned so a future "mask everything settings-shaped" pass does
+    not quietly change this without the reasoning in `config.py` being
+    revisited.
+    """
+    settings = DatabaseSettings(username="a-role-name")
+    assert not isinstance(settings.username, SecretStr)
+    assert "a-role-name" in repr(settings)
+
+
+def test_a_non_positive_producer_timeout_is_rejected():
+    """`producer_timeout_seconds` must be strictly positive.
+
+    Measured: `requests.get(timeout=0)` raises a bare `ValueError` from
+    `urllib3`, outside the `requests.RequestException` family `producer.py`
+    otherwise handles, before any network call happens. Rejecting the value
+    here removes the one trigger for that path known today; `producer.py`'s
+    broad exception handling is what closes the path itself.
+    """
+    with pytest.raises(ValidationError):
+        AppleWalletWebServiceSettings(producer_timeout_seconds=0)
