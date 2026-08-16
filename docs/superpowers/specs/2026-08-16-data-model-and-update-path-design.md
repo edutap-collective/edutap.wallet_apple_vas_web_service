@@ -295,16 +295,31 @@ The device stores the `lastUpdated` value it last received and returns it as
 
 ```
 list the registrations of this device under this pass type identifier where
-    delivered_tag IS NULL                    (never delivered to this device)
- OR last_update_tag > delivered_tag          (our record of what it holds)
- OR previousLastUpdated IS ABSENT            (no cursor: Apple says list all)
- OR last_update_tag > previousLastUpdated    (its own cursor)
+    delivered_tag IS NULL                            (never delivered to this device)
+ OR last_update_tag > delivered_tag                  (our record of what it holds)
+ OR (previousLastUpdated IS PRESENT
+     AND last_update_tag > previousLastUpdated)      (its own cursor)
 ```
 
-The two `IS NULL` / `IS ABSENT` arms are not decoration. `delivered_tag` is
-null until the first successful delivery, and in SQL `tag > NULL` is null
-rather than true — without the first arm a freshly registered pass would never
-be listed, which is the one failure mode this endpoint must not have.
+The `IS NULL` arm is not decoration. `delivered_tag` is null until the first
+successful delivery, and in SQL `tag > NULL` is null rather than true — without
+it a freshly registered pass would never be listed, which is the one failure
+mode this endpoint must not have.
+
+**The cursor arm is gated, and that is a deliberate departure from Apple's
+wording.** Apple says "or all passes when there's no tag". An earlier draft of
+this document made an absent cursor an arm of its own, which makes the whole
+condition true for every request that carries no cursor — every pass listed,
+every time, and a build at the producer for each. That is the "return
+everything" fallback this section rejects two paragraphs down, arriving through
+the back door.
+
+Our own record is the precise filter; the device's cursor is the safety net.
+A net that fires when the cursor is *absent* is not a net, it is the main rule.
+Apple permits a superset, it does not require one, and we hold better
+information than the device does.
+
+The cost is stated in the known limitation below.
 
 Each predicate closes the other's gap, and neither can shorten the list — the
 one error Apple's protocol does not forgive.
@@ -367,6 +382,24 @@ including when the device asks without a push:
 - `delivered_tag` — the tag current at the moment of delivery
 - `last_delivered_at` — when
 - `last_pushed_at` — set by the notifier when it sends a push
+
+### Known limitation: delivery cannot name the device
+
+Apple's delivery URL is `/v1/passes/{passTypeIdentifier}/{serialNumber}` and
+carries no device identifier, so the service cannot know which device is
+asking. Every registration of that pass which is behind is therefore recorded
+as current.
+
+With one device this is exact. With an iPhone and a paired Watch it is not, and
+it reaches the list endpoint too: a Watch that registers, and whose paired phone
+fetches the pass before the Watch's own first poll, is recorded as holding a
+pass it never received. Having no cursor of its own yet, it is answered `204`.
+After any one successful list response it has a cursor and the safety net works
+again, so the window is narrow — but it is real, and it is the same defect
+arriving at a second endpoint.
+
+Closing it needs `last_pushed_at`, which the notifier owns. It is not solvable
+from Apple's request alone.
 
 This makes the state readable: `pass.last_update_tag > registration.delivered_tag`
 means this device is behind, and `last_delivered_at` says since when. Push
