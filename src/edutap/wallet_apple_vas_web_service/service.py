@@ -7,6 +7,7 @@ from typing import Annotated
 import sqlalchemy as sa
 from fastapi import APIRouter, Depends, Header, Request
 from fastapi.responses import Response
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlmodel import Session
 
 from .config import AppleWalletWebServiceSettings, get_settings
@@ -61,6 +62,80 @@ def _authorized(
     )
 
 
+def _upsert_device(session: Session, device_library_identifier: str, push_token: str) -> None:
+    """Insert the device, or refresh its push token if it already exists.
+
+    `ON CONFLICT DO UPDATE`, not a `SELECT` followed by an `INSERT`/`UPDATE`: a
+    phone and its paired watch are two different devices that register the same
+    pass within milliseconds of each other -- an ordinary case, not an edge
+    one. A check-then-act would let the loser of that race hit an unhandled
+    `IntegrityError` on `commit()` and turn into a bare 500 instead of taking
+    the row it should have updated.
+    """
+    statement = (
+        pg_insert(Device.__table__)
+        .values(device_library_identifier=device_library_identifier, push_token=push_token)
+        .on_conflict_do_update(
+            index_elements=["device_library_identifier"],
+            set_={"push_token": push_token},
+        )
+    )
+    session.execute(statement)
+
+
+def _upsert_pass_record(session: Session, pass_type_identifier: str, serial_number: str) -> None:
+    """Insert the pass record if it does not exist yet; never touch an existing one.
+
+    `DO NOTHING`, not `DO UPDATE`: `last_update_tag` is the announcement state,
+    and a racing insert overwriting it would un-announce a change already
+    delivered. The sequence value this call consumes is spent either way --
+    tags only have to rise, not be dense, so one going unused because this
+    insert lost the race is harmless.
+    """
+    statement = (
+        pg_insert(PassRecord.__table__)
+        .values(
+            pass_type_identifier=pass_type_identifier,
+            serial_number=serial_number,
+            last_update_tag=next_update_tag(session),
+        )
+        .on_conflict_do_nothing(index_elements=["pass_type_identifier", "serial_number"])
+    )
+    session.execute(statement)
+
+
+def _insert_registration_if_absent(
+    session: Session,
+    device_library_identifier: str,
+    pass_type_identifier: str,
+    serial_number: str,
+) -> bool:
+    """Insert the registration if absent; return whether this call created it.
+
+    `RETURNING` on a `DO NOTHING` insert answers "did I just create this row?"
+    in the same round trip that does the inserting -- no separate `SELECT`
+    whose answer a concurrent insert could invalidate before this statement
+    runs. That answer is exactly Apple's 201-vs-200 distinction.
+    """
+    statement = (
+        pg_insert(Registration.__table__)
+        .values(
+            device_library_identifier=device_library_identifier,
+            pass_type_identifier=pass_type_identifier,
+            serial_number=serial_number,
+        )
+        .on_conflict_do_nothing(
+            index_elements=[
+                "device_library_identifier",
+                "pass_type_identifier",
+                "serial_number",
+            ]
+        )
+        .returning(Registration.__table__.c.device_library_identifier)
+    )
+    return session.execute(statement).first() is not None
+
+
 @router.post("/devices/{deviceLibraryIdentifier}/registrations/{passTypeIdentifier}/{serialNumber}")
 async def register_pass(
     deviceLibraryIdentifier: str,
@@ -90,42 +165,13 @@ async def register_pass(
     if data is None:
         return Response(status_code=400)
 
-    device = session.get(Device, deviceLibraryIdentifier)
-    if device is None:
-        session.add(
-            Device(device_library_identifier=deviceLibraryIdentifier, push_token=data.pushToken)
-        )
-    elif device.push_token != data.pushToken:
-        # A device that re-registers with a new token has moved; pushing to the
-        # old one would silently reach nobody.
-        device.push_token = data.pushToken
-        session.add(device)
-
-    if session.get(PassRecord, (passTypeIdentifier, serialNumber)) is None:
-        session.add(
-            PassRecord(
-                pass_type_identifier=passTypeIdentifier,
-                serial_number=serialNumber,
-                last_update_tag=next_update_tag(session),
-            )
-        )
-
-    existing = session.get(
-        Registration, (deviceLibraryIdentifier, passTypeIdentifier, serialNumber)
-    )
-    if existing is not None:
-        session.commit()
-        return Response(status_code=200)
-
-    session.add(
-        Registration(
-            device_library_identifier=deviceLibraryIdentifier,
-            pass_type_identifier=passTypeIdentifier,
-            serial_number=serialNumber,
-        )
+    _upsert_device(session, deviceLibraryIdentifier, data.pushToken)
+    _upsert_pass_record(session, passTypeIdentifier, serialNumber)
+    created = _insert_registration_if_absent(
+        session, deviceLibraryIdentifier, passTypeIdentifier, serialNumber
     )
     session.commit()
-    return Response(status_code=201)
+    return Response(status_code=201 if created else 200)
 
 
 @router.post("/log")

@@ -66,3 +66,41 @@ def test_the_token_of_another_pass_answers_401(client: TestClient):
 def test_a_missing_body_answers_400(client: TestClient):
     response = client.post(_url(), headers=_auth())
     assert response.status_code == 400
+
+
+def test_a_registration_that_already_exists_answers_200_without_erroring(
+    client: TestClient, db_session
+):
+    """The registration row exists for a reason other than a prior POST through
+    this endpoint -- a concurrent request that beat this one to the insert, for
+    instance. `ON CONFLICT DO NOTHING` must answer 200 here, not raise the
+    unhandled `IntegrityError` a plain `INSERT` would.
+    """
+    db_session.add(Device(device_library_identifier=DEVICE, push_token="a-push-token"))
+    db_session.add(PassRecord(pass_type_identifier=PTID, serial_number=SERIAL, last_update_tag=1))
+    db_session.add(
+        Registration(
+            device_library_identifier=DEVICE,
+            pass_type_identifier=PTID,
+            serial_number=SERIAL,
+        )
+    )
+    db_session.commit()
+
+    response = client.post(_url(), headers=_auth(), json={"pushToken": "a-push-token"})
+
+    assert response.status_code == 200
+
+
+def test_a_conflicting_pass_record_keeps_its_existing_update_tag(client: TestClient, db_session):
+    """`ON CONFLICT DO NOTHING` on the pass record must not touch
+    `last_update_tag`: it is the announcement state, and a losing insert
+    overwriting it would un-announce a change already delivered.
+    """
+    db_session.add(Device(device_library_identifier=DEVICE, push_token="a-push-token"))
+    db_session.add(PassRecord(pass_type_identifier=PTID, serial_number=SERIAL, last_update_tag=42))
+    db_session.commit()
+
+    client.post(_url(), headers=_auth(), json={"pushToken": "a-push-token"})
+
+    assert db_session.get(PassRecord, (PTID, SERIAL)).last_update_tag == 42
