@@ -376,12 +376,24 @@ dozens of builds.
 
 ### What collection records
 
-Written on a successful answer to `GET /v1/passes/{passTypeIdentifier}/{serialNumber}`,
-including when the device asks without a push:
+Written on **every** successful answer to
+`GET /v1/passes/{passTypeIdentifier}/{serialNumber}`, including when the device
+asks without a push and including a re-fetch that changes nothing:
 
 - `delivered_tag` — the tag current at the moment of delivery
 - `last_delivered_at` — when
 - `last_pushed_at` — set by the notifier when it sends a push
+
+**Not gated on the tag having moved.** Both purposes of `last_delivered_at` are
+about when the device last actually came: evidence that a voided pass was
+collected, and "pushed but never fetched" in support. A re-fetch is contact. If
+the write were gated, a column called `last_delivered_at` would in fact mean
+"first delivery of the current tag" — and a device that keeps fetching a pass
+nobody has changed would look, in the table, like a device that stopped coming.
+
+`delivered_tag` is written alongside it rather than only when it changes,
+because writing one without the other is what would need justifying: they record
+one event.
 
 ### Known limitation: delivery cannot name the device
 
@@ -453,6 +465,28 @@ Not fixed here; listed so they are not rediscovered.
   authentication, and what happens when the producer is unreachable while Apple
   is waiting. `404` and `410` may be used towards the producer; towards Apple
   the documented answers for that endpoint are only `200` and `401`.
+
+  **Decided, 2026-08-16: `410 → 401`, `404 → 503`.** They are not the same
+  answer and were collapsed into one. `410 Gone` is the producer stating that
+  this pass is permanently withdrawn: there is nothing to come back for, and
+  `401` is the strongest thing Apple's two codes let us say. `404` is the
+  producer not having the pass *right now* — a deploy mid-flight, a restored
+  replica, a mistyped URL template — and it is recoverable. Answering `401`
+  there tells the device its authentication token is dead, which Wallet cannot
+  recover from: it does not re-authenticate, and the token is fixed in the pass
+  ("Don't change the authentication token in an update"). A `503` is a "come
+  back later" the device already handles. Both answers stay inside the two
+  documented codes plus a transport-level `503`; the remaining question is
+  which of the two a producer will actually send, and that belongs in the
+  contract with the producer rather than here.
+
+  **The token derivation is part of that contract**, and section 4 is where it
+  is written down: the producer must compute the same HMAC-SHA256 over
+  `pass_type_identifier || 0x00 || serial_number` under the same
+  `issuer_secret`, hex-encoded, and put it in the pass's `authenticationToken`.
+  Nothing in the protocol reveals a mismatch: a producer that derives it
+  differently produces passes whose every registration and every delivery is
+  answered `401`, and the pass looks valid in Wallet.
 - **Observe what a device actually sends** on the list endpoint. The analysis
   in section 7 concludes the cursor is `passesUpdatedSince` on the wire, and
   the implementation accepts both names, so nothing is blocked. The evidence is

@@ -35,11 +35,28 @@ def test_the_producer_token_is_sent(settings, requests_mock):
     assert requests_mock.last_request.headers["Authorization"] == "Bearer a-producer-token"
 
 
-@pytest.mark.parametrize("status", [404, 410])
-def test_a_withdrawn_pass_raises_pass_not_available(settings, requests_mock, status):
-    requests_mock.get(EXPECTED_URL, status_code=status)
+def test_a_withdrawn_pass_raises_pass_not_available(settings, requests_mock):
+    """`410 Gone`: the producer states the pass is permanently withdrawn."""
+    requests_mock.get(EXPECTED_URL, status_code=410)
     with pytest.raises(PassNotAvailable):
         fetch_pass(settings, PTID, SERIAL)
+
+
+def test_a_pass_the_producer_does_not_have_is_not_pass_not_available(settings, requests_mock):
+    """`404` is the recoverable one, and it used to be collapsed into `410`.
+
+    A producer that has temporarily lost a pass -- a deploy mid-flight, a
+    restored replica, a mistyped template -- would otherwise make this service
+    tell the device its credential is dead, which Wallet cannot recover from.
+    `ProducerError` and not `PassNotAvailable` is what makes the route answer
+    503 rather than 401; asserted as "not the subclass", because
+    `PassNotAvailable` *is* a `ProducerError` and a plain `raises(ProducerError)`
+    would pass against the defect.
+    """
+    requests_mock.get(EXPECTED_URL, status_code=404)
+    with pytest.raises(ProducerError) as excinfo:
+        fetch_pass(settings, PTID, SERIAL)
+    assert not isinstance(excinfo.value, PassNotAvailable)
 
 
 def test_a_failing_producer_raises_producer_error(settings, requests_mock):

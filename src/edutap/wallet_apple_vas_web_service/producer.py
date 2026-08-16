@@ -96,11 +96,22 @@ from .config import AppleWalletWebServiceSettings
 
 
 class ProducerError(Exception):
-    """The producer could not be reached, or answered in a way we cannot use."""
+    """The producer could not be reached, or answered in a way we cannot use.
+
+    Answered `503` towards the device: something on our side is wrong or
+    temporarily broken, and the device should come back.
+    """
 
 
 class PassNotAvailable(ProducerError):
-    """The producer knows this pass and will not hand it out."""
+    """The producer knows this pass and will not hand it out — permanently.
+
+    Answered `401` towards the device, which is what Apple leaves us: the
+    delivery endpoint documents `200` and `401` and nothing else, so "this pass
+    is gone" has to be said as "your credential is not good for this pass".
+
+    Raised for `410 Gone` alone. A `404` is *not* this: see `fetch_pass`.
+    """
 
 
 def _producer_headers(settings: AppleWalletWebServiceSettings) -> dict[str, str]:
@@ -168,8 +179,18 @@ def fetch_pass(
         raise ProducerError(f"The producer is not reachable ({error_type}).")
     status_code, content = result
 
-    if status_code in (404, 410):
-        raise PassNotAvailable(f"The producer does not serve {serial_number!r}.")
+    # `410` and `404` are not the same answer, and collapsing them cost the
+    # recoverable one its recovery. `410 Gone` is the producer stating that this
+    # pass is permanently withdrawn -- there is nothing to come back for, and
+    # `PassNotAvailable` turns it into the `401` that is the strongest thing
+    # Apple's two documented codes let us say. `404` is the producer not having
+    # the pass *right now*: a deploy mid-flight, a restored replica, a
+    # mistyped template. Telling a device its credential is dead because a
+    # producer lost a pass for thirty seconds is unrecoverable from the
+    # device's side -- Wallet does not re-authenticate -- while a `503` is a
+    # "come back later" the device already handles.
+    if status_code == 410:
+        raise PassNotAvailable(f"The producer no longer serves {serial_number!r}.")
     if status_code != 200:
         raise ProducerError(f"The producer answered {status_code}.")
     return content

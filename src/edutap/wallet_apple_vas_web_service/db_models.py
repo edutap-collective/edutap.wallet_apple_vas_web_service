@@ -136,9 +136,16 @@ class Registration(Base, table=True):
         description="The tag this device provably holds. Null until the first delivery.",
     )
     last_pushed_at: datetime | None = Field(
-        default=None, sa_column=sa.Column(sa.DateTime(timezone=True), nullable=True)
+        default=None,
+        sa_column=sa.Column(sa.DateTime(timezone=True), nullable=True),
+        description="When the notifier last sent a push for this pass to this device.",
     )
     last_delivered_at: datetime | None = Field(
-        default=None, sa_column=sa.Column(sa.DateTime(timezone=True), nullable=True)
+        default=None,
+        sa_column=sa.Column(sa.DateTime(timezone=True), nullable=True),
+        description=(
+            "When this pass was last delivered. Written on every successful delivery, "
+            "including a re-fetch that changed nothing: it records contact, not change."
+        ),
     )
     created_at: datetime = Field(default_factory=_utcnow, sa_column=_timestamp())

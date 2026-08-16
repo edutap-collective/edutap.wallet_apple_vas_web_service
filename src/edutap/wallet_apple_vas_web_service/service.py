@@ -304,8 +304,13 @@ def send_updated_pass(
     reads current data. This service passes Apple's key through and records what
     the device now holds.
 
-    Apple documents 200 and 401 for this endpoint and nothing else, so a pass
-    the producer refuses is answered 401 rather than 404 or 410.
+    Apple documents 200 and 401 for this endpoint and nothing else, so both
+    answers below stay inside those two codes plus 503. A producer `410` --
+    this pass is permanently gone -- becomes 401, the strongest statement the
+    contract allows. A producer `404` becomes 503: it is the recoverable one,
+    and telling a device its credential is dead because a producer lost a pass
+    for thirty seconds is not something the device can recover from. See
+    `producer.fetch_pass`.
     """
     if not _authorized(authorization, settings, passTypeIdentifier, serialNumber):
         return Response(status_code=401)
@@ -331,10 +336,16 @@ def send_updated_pass(
                 Registration.serial_number == serialNumber,
             )
         ).all():
-            if registration.delivered_tag != record.last_update_tag:
-                registration.delivered_tag = record.last_update_tag
-                registration.last_delivered_at = delivered_at
-                session.add(registration)
+            # Written on *every* successful delivery, not only when the tag has
+            # moved. Both of the things `last_delivered_at` is for are about
+            # when the device last actually came: evidence that a voided pass
+            # was collected, and "pushed but never fetched" in support. A
+            # re-fetch of an unchanged pass is contact, and gating the write on
+            # the tag would make a column called `last_delivered_at` mean
+            # "first delivery of the current tag" instead.
+            registration.delivered_tag = record.last_update_tag
+            registration.last_delivered_at = delivered_at
+            session.add(registration)
         session.commit()
 
     return Response(

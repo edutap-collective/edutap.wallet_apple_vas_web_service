@@ -48,6 +48,32 @@ def test_delivery_records_what_the_device_now_holds(
     assert registration.last_delivered_at is not None
 
 
+def test_a_refetch_of_an_unchanged_pass_still_records_the_contact(
+    registered: TestClient, requests_mock, db_session
+):
+    """`last_delivered_at` moves on every successful delivery, not only on a new tag.
+
+    Both of its purposes are about when the device last actually came --
+    evidence that a voided pass was collected, and "pushed but never fetched"
+    in support. A re-fetch of an unchanged pass is contact. Gated on the tag
+    having moved, the column would mean "first delivery of the current tag"
+    while being called `last_delivered_at`, and the second fetch here would
+    leave it untouched.
+    """
+    requests_mock.get(PRODUCER_URL, content=b"PK\x03\x04")
+
+    registered.get(DELIVERY_URL, headers=_auth())
+    db_session.expire_all()
+    first = db_session.get(Registration, (DEVICE, PTID, SERIAL)).last_delivered_at
+
+    # Nothing changes the pass in between: the tag is the same on both fetches.
+    registered.get(DELIVERY_URL, headers=_auth())
+    db_session.expire_all()
+    registration = db_session.get(Registration, (DEVICE, PTID, SERIAL))
+
+    assert registration.last_delivered_at > first
+
+
 def test_a_wrong_token_answers_401_without_asking_the_producer(
     registered: TestClient, requests_mock
 ):
@@ -64,9 +90,23 @@ def test_an_unreachable_producer_answers_503(registered: TestClient, requests_mo
 
 def test_a_withdrawn_pass_answers_401(registered: TestClient, requests_mock):
     # Apple documents only 200 and 401 for this endpoint, so a pass the producer
-    # refuses cannot be reported as 404 or 410 without leaving the contract.
+    # has permanently withdrawn cannot be reported as 410 without leaving the
+    # contract. 401 is the strongest thing those two codes let us say.
     requests_mock.get(PRODUCER_URL, status_code=410)
     assert registered.get(DELIVERY_URL, headers=_auth()).status_code == 401
+
+
+def test_a_pass_the_producer_does_not_have_answers_503(registered: TestClient, requests_mock):
+    """`404` is recoverable and must not be reported as a dead credential.
+
+    A producer mid-deploy, a restored replica or a mistyped template all show
+    up as `404`. A `401` tells the device its authentication token is no good,
+    which Wallet does not recover from -- it does not re-authenticate. A `503`
+    is a "come back later" the device already handles. The two used to be
+    collapsed into one answer.
+    """
+    requests_mock.get(PRODUCER_URL, status_code=404)
+    assert registered.get(DELIVERY_URL, headers=_auth()).status_code == 503
 
 
 def test_delivery_to_an_unregistered_device_still_works(client: TestClient, requests_mock):
