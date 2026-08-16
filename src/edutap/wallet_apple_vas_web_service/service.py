@@ -1,7 +1,8 @@
-"""The Apple Wallet web service endpoints: register, list, unregister, deliver, log."""
+"""The Apple Wallet web service endpoints: register, list, deliver, unregister, log."""
 
 import logging
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from typing import Annotated
 
 import sqlalchemy as sa
@@ -13,6 +14,7 @@ from sqlmodel import Session, select
 from .config import AppleWalletWebServiceSettings, get_settings
 from .db_models import UPDATE_TAG_SEQUENCE, Device, PassRecord, Registration
 from .http_models import AppleWalletWebServiceAuthorizationPayload, LogEntries, SerialNumbers
+from .producer import PassNotAvailable, ProducerError, fetch_pass
 from .session import get_session
 from .tokens import verify_authorization
 
@@ -256,6 +258,64 @@ async def list_updatable_passes(
         lastUpdated=str(max(record.last_update_tag for _, record in behind)),
     )
     return Response(payload.model_dump_json(), status_code=200, media_type="application/json")
+
+
+@router.get("/passes/{passTypeIdentifier}/{serialNumber}")
+async def send_updated_pass(
+    passTypeIdentifier: str,
+    serialNumber: str,
+    authorization: Annotated[str | None, Header()] = None,
+    *,
+    settings: AppleWalletWebServiceSettings = Depends(get_settings),
+    session: Session = Depends(get_session),
+) -> Response:
+    """Create and sign an updated pass, and send it to the device.
+
+    https://developer.apple.com/documentation/walletpasses/send-an-updated-pass
+
+    The pass is built by the configured producer, which resolves the person and
+    reads current data. This service passes Apple's key through and records what
+    the device now holds.
+
+    Apple documents 200 and 401 for this endpoint and nothing else, so a pass
+    the producer refuses is answered 401 rather than 404 or 410.
+    """
+    if not _authorized(authorization, settings, passTypeIdentifier, serialNumber):
+        return Response(status_code=401)
+
+    try:
+        content = fetch_pass(settings, passTypeIdentifier, serialNumber)
+    except PassNotAvailable:
+        return Response(status_code=401)
+    except ProducerError:
+        LOGGER.exception("The producer could not deliver %s/%s", passTypeIdentifier, serialNumber)
+        return Response(status_code=503)
+
+    record = session.get(PassRecord, (passTypeIdentifier, serialNumber))
+    if record is not None:
+        delivered_at = datetime.now(tz=UTC)
+        # Apple's delivery URL carries no device identifier, so which device is
+        # asking cannot be known here. Every registration of this pass that is
+        # behind is recorded as current -- see "Known limitation" in the plan
+        # this route comes from.
+        for registration in session.exec(
+            select(Registration).where(
+                Registration.pass_type_identifier == passTypeIdentifier,
+                Registration.serial_number == serialNumber,
+            )
+        ).all():
+            if registration.delivered_tag != record.last_update_tag:
+                registration.delivered_tag = record.last_update_tag
+                registration.last_delivered_at = delivered_at
+                session.add(registration)
+        session.commit()
+
+    return Response(
+        content,
+        status_code=200,
+        media_type="application/vnd.apple.pkpass",
+        headers={"Content-Disposition": f'attachment; filename="{serialNumber}.pkpass"'},
+    )
 
 
 @router.delete(

@@ -134,6 +134,20 @@ class AppleWalletWebServiceSettings(_FileAwareSettings):
     bootstrap_servers: str | None = None
     topic: str | None = None
 
+    producer_pass_url_template: str | None = None
+    """Where to fetch a built pass, with `{pass_type_identifier}` and `{serial_number}`.
+
+    A template rather than a base URL, because the retrieval contract with the
+    producer is not settled (see the design document). A deployment supplies the
+    shape it agreed, and this service hardcodes no assumption about it.
+    """
+
+    producer_api_token: SecretStr | None = None
+    """Bearer token this service presents to its producer."""
+
+    producer_timeout_seconds: float = 10.0
+    """How long to wait for a built pass. Apple's device is waiting behind it."""
+
     # ``default_factory`` rather than an instance in the class body, matching ``db``
     # below: an instance here is built while this module is imported, so a settings
     # error would surface as an import failure rather than at the call that reads it.
