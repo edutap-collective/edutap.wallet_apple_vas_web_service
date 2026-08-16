@@ -21,6 +21,7 @@ import logging
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Annotated
+from urllib.parse import quote
 
 import sqlalchemy as sa
 from fastapi import APIRouter, Depends, Header, Request
@@ -289,6 +290,40 @@ def list_updatable_passes(
     return Response(payload.model_dump_json(), status_code=200, media_type="application/json")
 
 
+_SAFE_FILENAME_CHARACTERS = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
+)
+
+
+def _content_disposition(serial_number: str) -> str:
+    """Return the `Content-Disposition` value for one delivered pass.
+
+    The serial number used to be interpolated into `filename="..."` unescaped,
+    and it is caller-controlled: it arrives in the URL, and this service accepts
+    a delivery request for a pass it has never heard of. A serial containing a
+    double quote closes the quoted string and everything after it is read as
+    further header parameters; a serial containing CR or LF is a header
+    injection attempt, which the ASGI server rejects -- with a 500 on an
+    endpoint whose contract is 200 or 401.
+
+    Two forms, per RFC 6266. `filename*` carries the real value, percent-encoded
+    by RFC 5987, so nothing in it can be a delimiter; `filename` is the fallback
+    for a client that does not read the extended form, reduced to characters
+    that cannot escape a quoted string. A client that understands both must
+    prefer `filename*`, so the reduction never changes what a modern client
+    sees.
+
+    Neither form matters to Wallet, which goes by the `Content-Type` -- this is
+    for the human who fetches the URL with a browser or curl while debugging,
+    and for not handing a header parser something shaped like an injection.
+    """
+    filename = f"{serial_number}.pkpass"
+    reduced = "".join(
+        character if character in _SAFE_FILENAME_CHARACTERS else "_" for character in filename
+    )
+    return f"attachment; filename=\"{reduced}\"; filename*=UTF-8''{quote(filename, safe='')}"
+
+
 @router.get("/passes/{passTypeIdentifier}/{serialNumber}")
 def send_updated_pass(
     passTypeIdentifier: str,
@@ -333,10 +368,22 @@ def send_updated_pass(
         # behind is recorded as current -- see "Known limitation" in the plan
         # this route comes from.
         for registration in session.exec(
-            select(Registration).where(
+            select(Registration)
+            .where(
                 Registration.pass_type_identifier == passTypeIdentifier,
                 Registration.serial_number == serialNumber,
             )
+            # Ordered so two concurrent deliveries of the same pass take their
+            # row locks in the same sequence. Without it the two SELECTs may
+            # return the same rows in different orders -- a plan change is
+            # enough -- and each then updates them one by one, holding a row the
+            # other is waiting for. PostgreSQL breaks that by aborting one side
+            # with `DeadlockDetected`, which surfaces as a 500, outside the two
+            # codes Apple documents for this endpoint. A phone and its paired
+            # Watch both fetching after a push is the ordinary case, not an edge
+            # one -- the same reasoning as the lock ordering in
+            # `unregister_pass`.
+            .order_by(Registration.device_library_identifier)
         ).all():
             # Written on *every* successful delivery, not only when the tag has
             # moved. Both of the things `last_delivered_at` is for are about
@@ -354,7 +401,7 @@ def send_updated_pass(
         content,
         status_code=200,
         media_type="application/vnd.apple.pkpass",
-        headers={"Content-Disposition": f'attachment; filename="{serialNumber}.pkpass"'},
+        headers={"Content-Disposition": _content_disposition(serialNumber)},
     )
 
 

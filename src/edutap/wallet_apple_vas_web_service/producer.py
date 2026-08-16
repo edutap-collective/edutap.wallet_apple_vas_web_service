@@ -152,9 +152,31 @@ def fetch_pass(
     if not settings.producer_pass_url_template:
         raise ProducerError("No producer configured: producer_pass_url_template is unset.")
 
-    url = settings.producer_pass_url_template.format(
-        pass_type_identifier=pass_type_identifier, serial_number=serial_number
-    )
+    # Its own `try`, and deliberately not folded into the broad one below.
+    # `str.format` raises on a template this deployment got wrong -- `KeyError`
+    # for a placeholder nobody supplies, `IndexError` for a positional `{}`,
+    # `ValueError` for an unmatched brace or a bad conversion -- and an
+    # unguarded call turns a configuration mistake into a 500 on an endpoint
+    # whose contract is 200 or 401. It must not go inside the `except Exception`
+    # around the request either: that block's message says the producer is not
+    # reachable, and reporting a typo in our own configuration as an unreachable
+    # producer would send an operator to look at the wrong machine.
+    #
+    # Captured and raised afterwards, the same shape as below, so no exception
+    # is being handled at the raise point -- see the module docstring. The
+    # exposure here is smaller (a `KeyError` names a placeholder, not a value),
+    # but one rule in one file is worth more than two.
+    url: str | None = None
+    template_error: str | None = None
+    try:
+        url = settings.producer_pass_url_template.format(
+            pass_type_identifier=pass_type_identifier, serial_number=serial_number
+        )
+    except (KeyError, IndexError, ValueError, AttributeError) as error:
+        template_error = type(error).__name__
+
+    if url is None:
+        raise ProducerError(f"The producer URL template is malformed ({template_error}).")
 
     # Caught broadly, not `except requests.RequestException:`: `requests.get`
     # can also raise a plain exception from underneath it (a non-positive

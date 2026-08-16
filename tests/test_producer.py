@@ -70,6 +70,47 @@ def test_an_unconfigured_producer_raises_producer_error():
         fetch_pass(AppleWalletWebServiceSettings(), PTID, SERIAL)
 
 
+@pytest.mark.parametrize(
+    "template",
+    [
+        pytest.param("https://builder.invalid/passes/{unknown_placeholder}", id="unknown-key"),
+        pytest.param("https://builder.invalid/passes/{}", id="positional"),
+        pytest.param("https://builder.invalid/passes/{serial_number", id="unmatched-brace"),
+        pytest.param("https://builder.invalid/passes/{serial_number!z}", id="bad-conversion"),
+    ],
+)
+def test_a_malformed_url_template_is_a_producer_error_not_a_500(template):
+    """`str.format` on a misconfigured template must not escape as a bare 500.
+
+    The endpoint's contract is 200 or 401 (plus 503 for a producer that cannot
+    answer); a `KeyError` from our own configuration reaching the client as a
+    500 is outside it. The interpolation used to sit outside every guard.
+    """
+    settings = AppleWalletWebServiceSettings(producer_pass_url_template=template)
+    with pytest.raises(ProducerError, match="malformed"):
+        fetch_pass(settings, PTID, SERIAL)
+
+
+def test_a_malformed_template_does_not_claim_the_producer_is_unreachable(requests_mock):
+    """The two failures must not share a message.
+
+    Folding the template guard into the broad `except` around the request would
+    report a typo in this deployment's own configuration as "the producer is
+    not reachable", and send an operator to look at the wrong machine.
+    """
+    settings = AppleWalletWebServiceSettings(
+        producer_pass_url_template="https://builder.invalid/passes/{unknown_placeholder}"
+    )
+    with pytest.raises(ProducerError) as excinfo:
+        fetch_pass(settings, PTID, SERIAL)
+
+    assert "not reachable" not in str(excinfo.value)
+    assert "KeyError" in str(excinfo.value)
+    # No request was attempted -- requests_mock registers no matcher, so any
+    # call would raise NoMockAddress rather than reach the network.
+    assert requests_mock.call_count == 0
+
+
 def _fetch_pass_frame(traceback):
     """Return the frame belonging to `fetch_pass` from a raised exception's traceback.
 
