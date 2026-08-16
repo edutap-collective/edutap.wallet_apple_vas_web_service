@@ -124,6 +124,18 @@ markers = [
 # that fails for environmental reasons is a suite nobody runs.
 addopts = "-m 'not integration'"
 
+# An `xfail` states a limitation. Without `strict`, a limitation that later
+# disappears turns into a silent `XPASS` -- the suite goes on carrying a false
+# statement about the code, and the `reason=` text stays in the file as
+# documentation of something that is no longer true. That is exactly what
+# happened to the `_FILE` convention's `xfail`: it asserted that a complex field
+# could not be loaded from a Docker secret, and the reason it gave for that
+# ("reworking it touches every settings field") was wrong.
+#
+# There is no `xfail` in the suite as this is written. The setting is here so
+# that the next one has to be honest from the day it is added.
+xfail_strict = true
+
 [tool.ruff]
 line-length = 100
 src = ["src", "tests"]

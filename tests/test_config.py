@@ -60,31 +60,84 @@ def test_accepted_secrets_drops_empty_previous_secrets():
     ]
 
 
-@pytest.mark.xfail(
-    reason=(
-        "FileSecretsSource returns file contents as a string without JSON parsing. "
-        "Pydantic-settings only parses JSON when values come from environment variables, "
-        "not from files. So previous_authentication_secrets (list[SecretStr]) cannot be "
-        "loaded via the _FILE convention. Use environment variables or hardcoding instead."
-    )
-)
 def test_previous_authentication_secrets_file_convention(tmp_path, monkeypatch):
-    """The _FILE convention should support previous_authentication_secrets from a file."""
-    # Create a temporary file containing a JSON array
+    """A complex field loads from a `_FILE` secret, as JSON.
+
+    This was an `xfail` on the claim that reworking `FileSecretsSource` would
+    touch every settings field. It does not: the source reports each field's
+    own `field_is_complex`, decodes in `prepare_field_value`, and calls that
+    step from `__call__` -- which it never did. A retired issuer secret is
+    exactly the kind of value that should be able to arrive as a Docker secret
+    rather than as an environment variable.
+    """
     secrets_file = tmp_path / "secrets.json"
     secrets_file.write_text('["older-secret","oldest-secret"]')
 
-    # Point the environment variable to the file
     monkeypatch.setenv(
         "EDUTAP_WALLET_APPLE_VAS_WEB_SERVICE_PREVIOUS_AUTHENTICATION_SECRETS_FILE",
         str(secrets_file),
     )
 
-    # Load settings and check if the previous secrets were loaded
     settings = AppleWalletWebServiceSettings()
     assert len(settings.previous_authentication_secrets) == 2
     assert settings.previous_authentication_secrets[0].get_secret_value() == "older-secret"
     assert settings.previous_authentication_secrets[1].get_secret_value() == "oldest-secret"
+
+
+def test_a_simple_field_still_loads_from_a_file_verbatim(tmp_path, monkeypatch):
+    """The plain-string path is unaffected by the decoding added for complex fields.
+
+    A secret is an arbitrary string. If the new branch reached it, a value that
+    happens to look like JSON -- a number, `null`, a quoted string -- would come
+    back as something other than itself, and one that does not would raise.
+    """
+    secret_file = tmp_path / "issuer-secret"
+    secret_file.write_text("  12345  \n")
+
+    monkeypatch.setenv(
+        "EDUTAP_WALLET_APPLE_VAS_WEB_SERVICE_AUTHENTICATION_SECRET_FILE", str(secret_file)
+    )
+
+    settings = AppleWalletWebServiceSettings()
+    assert settings.authentication_secret.get_secret_value() == "12345"
+
+
+def test_a_malformed_secrets_file_is_reported_without_its_contents(tmp_path, monkeypatch):
+    """The raised error names the variable and the field, and carries no chain.
+
+    `json.JSONDecodeError` keeps the whole document it failed to parse in its
+    `doc` attribute, and here that document is the plaintext of a secrets file.
+    Chaining it -- with `from error`, or with `from None`, which only sets
+    `__suppress_context__` -- would put that on the raised exception's object
+    graph, where an error tracker that walks the chain collects it as an
+    exception *attribute*. That is what the capture-then-raise shape in
+    `prepare_field_value` prevents, and it is what this pins.
+
+    **What it does not pin**, deliberately: the file's contents are still a
+    frame local of `prepare_field_value` on the raised exception's traceback.
+    That cannot be helped -- `value` is the parameter the function was called
+    with, the same accepted residue `producer.py` documents for `settings`, and
+    pydantic-settings' own `EnvSettingsSource` has exactly the same shape. A
+    `capture_locals` tracker sees it either way; what this fix removes is the
+    second, easier path, not the first.
+    """
+    from pydantic_settings import SettingsError
+
+    secrets_file = tmp_path / "secrets.json"
+    secrets_file.write_text('["a-retired-secret", not json at all')
+
+    monkeypatch.setenv(
+        "EDUTAP_WALLET_APPLE_VAS_WEB_SERVICE_PREVIOUS_AUTHENTICATION_SECRETS_FILE",
+        str(secrets_file),
+    )
+
+    with pytest.raises(SettingsError) as excinfo:
+        AppleWalletWebServiceSettings()
+
+    assert "a-retired-secret" not in str(excinfo.value)
+    assert "previous_authentication_secrets" in str(excinfo.value)
+    assert excinfo.value.__cause__ is None
+    assert excinfo.value.__context__ is None
 
 
 def test_authentication_cannot_be_switched_off_by_configuration(monkeypatch):

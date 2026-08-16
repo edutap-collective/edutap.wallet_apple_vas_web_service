@@ -10,7 +10,12 @@ from typing import Any
 from edutap.wallet_apple.settings import Settings as WalletAppleSettings
 from pydantic import Field, HttpUrl, SecretStr
 from pydantic.fields import FieldInfo
-from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
+from pydantic_settings import (
+    BaseSettings,
+    PydanticBaseSettingsSource,
+    SettingsConfigDict,
+    SettingsError,
+)
 from sqlalchemy import URL as SQLAlchemyURL
 
 
@@ -21,31 +26,89 @@ class FileSecretsSource(PydanticBaseSettingsSource):
     existing file, the field takes that file's stripped contents. This lets
     secrets arrive as Docker secrets (``/run/secrets/<name>``) instead of via the
     environment.
+
+    A **complex** field -- a list, a dict, a model -- takes its file contents as
+    JSON, the same way pydantic-settings parses one from an environment
+    variable. That is not what this source did: it reported every field as
+    simple and never called its own ``prepare_field_value``, so
+    ``previous_authentication_secrets`` (a ``list[SecretStr]``) could only be
+    configured through the environment. A retired issuer secret is exactly the
+    kind of value that should be able to arrive as a Docker secret, and the
+    field whose absence silently makes every pass built before a rotation
+    unusable is a poor one to have no secure path for.
     """
 
     def get_field_value(self, field: FieldInfo, field_name: str) -> tuple[Any, str, bool]:
-        """Return the field's value from the file named by ``<PREFIX><FIELD>_FILE``."""
+        """Return the field's value from the file named by ``<PREFIX><FIELD>_FILE``.
+
+        The third element says whether the value still has to be decoded, and it
+        is the field's own answer (``field_is_complex``) rather than a constant
+        ``False``. A hardcoded ``False`` meant a JSON array read out of a file
+        reached the validator as one long string.
+        """
         prefix = self.config.get("env_prefix", "") or ""
         base = f"{prefix}{field_name}_file"
         for env_name in (base, base.upper()):
             path = os.environ.get(env_name)
             if path and Path(path).is_file():
-                return Path(path).read_text().strip(), field_name, False
+                return Path(path).read_text().strip(), field_name, self.field_is_complex(field)
         return None, field_name, False
 
     def prepare_field_value(
         self, field_name: str, field: FieldInfo, value: Any, value_is_complex: bool
     ) -> Any:
-        """Pass the value through unchanged; file contents need no further parsing."""
-        return value
+        """Decode a complex field's JSON; pass a simple field's contents through.
+
+        ``decode_complex_value`` rather than a bare ``json.loads``: it is the
+        base class's own helper, so ``NoDecode``/``ForceDecode`` and
+        ``enable_decoding`` mean here what they mean for an environment
+        variable.
+
+        The failure is raised *after* the ``except`` block rather than inside
+        it, and nothing about the original exception is carried out but its
+        class name. ``json.JSONDecodeError`` keeps the whole document it failed
+        to parse in its ``doc`` attribute -- which here is the plaintext
+        contents of a secrets file. Chaining it, with ``from error`` or with
+        ``from None`` (which only sets ``__suppress_context__``), would put that
+        on the raised exception's object graph, where an error tracker that
+        walks the chain would collect it as an exception *attribute*. Same
+        reasoning, same shape, as ``producer.py``; read its module docstring for
+        the measurement.
+
+        Stated precisely rather than rounded up: this closes the chain, not the
+        frame. ``value`` is this function's own parameter and is therefore a
+        local on the raised exception's traceback, exactly as ``settings`` is in
+        ``producer.fetch_pass`` -- and as the file's contents are in
+        pydantic-settings' own ``EnvSettingsSource``. A tool that captures frame
+        locals still sees it. The easier path is removed; the harder one is
+        accepted, and named here so nobody reads this as more than it is.
+        """
+        if value is None or not value_is_complex:
+            return value
+        error_type: str | None = None
+        try:
+            return self.decode_complex_value(field_name, field, value)
+        except ValueError as error:
+            error_type = type(error).__name__
+        variable = f"{self.config.get('env_prefix', '') or ''}{field_name}_file".upper()
+        raise SettingsError(
+            f"{variable} does not contain valid JSON for the complex field "
+            f"{field_name!r} ({error_type})."
+        )
 
     def __call__(self) -> dict[str, Any]:
-        """Collect every field that has a readable ``_FILE`` companion."""
+        """Collect every field that has a readable ``_FILE`` companion.
+
+        Goes through ``prepare_field_value``, which it used to skip -- the third
+        element of ``get_field_value`` was discarded and the value stored raw.
+        A source that never calls its own preparation step cannot decode
+        anything, however correct that step is.
+        """
         data: dict[str, Any] = {}
         for field_name, field in self.settings_cls.model_fields.items():
-            value, key, _ = self.get_field_value(field, field_name)
+            value, key, value_is_complex = self.get_field_value(field, field_name)
             if value is not None:
-                data[key] = value
+                data[key] = self.prepare_field_value(field_name, field, value, value_is_complex)
         return data
 
 
