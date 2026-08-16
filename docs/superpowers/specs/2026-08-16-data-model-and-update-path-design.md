@@ -320,6 +320,38 @@ one error Apple's protocol does not forgive.
 `lastUpdated` in the response is the highest tag among the passes returned,
 rendered as a string, matching Apple's example.
 
+### The name of the incoming cursor
+
+Read `passesUpdatedSince`, fall back to `previousLastUpdated`, ignore a value
+that does not parse. One line, and the question below stops mattering.
+
+Apple's current endpoint page names the cursor `previousLastUpdated` and lists
+it under *Path Parameters*, marked required. This service, and the reference
+handler in `edutap.wallet_apple`, read `passesUpdatedSince` from the query
+string. The discrepancy is very probably editorial rather than real:
+
+- **The page contradicts itself.** Its URL template carries two placeholders,
+  `{deviceLibraryIdentifier}` and `{passTypeIdentifier}`, while three path
+  parameters are listed. A path parameter without a placeholder cannot exist.
+  The register and unregister pages, with three of each, are consistent — only
+  this one is not. The overview page compounds it by calling the value a
+  "command line argument".
+- **A rename is not available to Apple.** The client is iOS. Renaming a query
+  parameter the devices send would break every deployed pass web service at
+  once. The wire format is frozen by the installed base.
+
+The likely origin is the migration from the older prose reference, where the
+request was documented as `?passesUpdatedSince=<tag>` and the response key as
+`lastUpdated`, to the generated endpoint pages: a semantic description of the
+value — "the previous `lastUpdated`" — became a parameter name and landed in
+the wrong section.
+
+What documentation cannot settle is whether a current iOS version sends
+something else as well. Only observed traffic can, which is the open point in
+section 9. Until then the design does not depend on the answer: the cursor is
+the second predicate of the filter, behind `delivered_tag`. A wrong name would
+cost the safety net, not correctness.
+
 **Returning the whole list instead of filtering was considered and rejected.**
 It is protocol-legal, but every returned serial number causes a
 `GET /v1/passes/…`, and every one of those causes a build at the producer. A
@@ -388,10 +420,11 @@ Not fixed here; listed so they are not rediscovered.
   authentication, and what happens when the producer is unreachable while Apple
   is waiting. `404` and `410` may be used towards the producer; towards Apple
   the documented answers for that endpoint are only `200` and `401`.
-- **Parameter name.** Apple's current endpoint page calls it
-  `previousLastUpdated` and marks it a required path parameter; this service
-  reads `passesUpdatedSince` as a query parameter. What the device actually
-  sends decides, and it must be observed before anything is changed.
+- **Observe what a device actually sends** on the list endpoint. The analysis
+  in section 7 concludes the cursor is `passesUpdatedSince` on the wire, and
+  the implementation accepts both names, so nothing is blocked. The evidence is
+  still missing: an access log line from a real device on demo or dev would
+  settle it, and only that would.
 - **Deactivation mechanics.** Delivering a `voided` pass is the likely
   Apple-native route, since "an updated pass is a new pass with the same pass
   type identifier and serial number". Not verified.
