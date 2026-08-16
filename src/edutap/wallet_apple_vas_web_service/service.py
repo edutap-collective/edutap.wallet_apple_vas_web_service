@@ -8,7 +8,7 @@ import sqlalchemy as sa
 from fastapi import APIRouter, Depends, Header, Request
 from fastapi.responses import Response
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from .config import AppleWalletWebServiceSettings, get_settings
 from .db_models import UPDATE_TAG_SEQUENCE, Device, PassRecord, Registration
@@ -172,6 +172,49 @@ async def register_pass(
     )
     session.commit()
     return Response(status_code=201 if created else 200)
+
+
+@router.delete(
+    "/devices/{deviceLibraryIdentifier}/registrations/{passTypeIdentifier}/{serialNumber}"
+)
+async def unregister_pass(
+    deviceLibraryIdentifier: str,
+    passTypeIdentifier: str,
+    serialNumber: str,
+    authorization: Annotated[str | None, Header()] = None,
+    *,
+    settings: AppleWalletWebServiceSettings = Depends(get_settings),
+    session: Session = Depends(get_session),
+) -> Response:
+    """Stop sending update notifications for a pass on a device.
+
+    https://developer.apple.com/documentation/walletpasses/unregister-a-pass-for-update-notifications
+
+    Apple's tasks: delete the mapping, then delete the device if no registration
+    is left for it. Answers 200 or 401 — the two codes Apple documents.
+    """
+    if not _authorized(authorization, settings, passTypeIdentifier, serialNumber):
+        return Response(status_code=401)
+
+    registration = session.get(
+        Registration, (deviceLibraryIdentifier, passTypeIdentifier, serialNumber)
+    )
+    if registration is not None:
+        session.delete(registration)
+        session.flush()
+
+    remaining = session.exec(
+        select(Registration).where(
+            Registration.device_library_identifier == deviceLibraryIdentifier
+        )
+    ).first()
+    if remaining is None:
+        device = session.get(Device, deviceLibraryIdentifier)
+        if device is not None:
+            session.delete(device)
+
+    session.commit()
+    return Response(status_code=200)
 
 
 @router.post("/log")
