@@ -88,3 +88,51 @@ def test_an_unparsable_cursor_is_ignored(registered: TestClient):
 def test_an_unknown_device_gets_204(client: TestClient):
     unknown = "/apple_update_service/v1/devices/no-such-device/registrations/" + PTID
     assert client.get(unknown).status_code == 204
+
+
+def test_a_cursor_below_our_own_record_still_lists_the_pass(registered: TestClient, db_session):
+    # delivered_tag is caught up, so arm 1 of the filter no longer decides --
+    # this is the one configuration where the cursor arm is the one that must
+    # list the pass, because the device's own claim says it is behind.
+    registration = db_session.get(Registration, (DEVICE, PTID, SERIAL))
+    record = db_session.get(PassRecord, (PTID, SERIAL))
+    registration.delivered_tag = record.last_update_tag
+    db_session.add(registration)
+    db_session.commit()
+    body = registered.get(
+        LIST_URL, params={"passesUpdatedSince": str(record.last_update_tag - 1)}
+    ).json()
+    assert body["serialNumbers"] == [SERIAL]
+
+
+def test_a_cursor_at_or_above_our_own_record_yields_204(registered: TestClient, db_session):
+    # The mirror case: with delivered_tag caught up and a cursor that is not
+    # behind either, nothing should be listed.
+    registration = db_session.get(Registration, (DEVICE, PTID, SERIAL))
+    record = db_session.get(PassRecord, (PTID, SERIAL))
+    registration.delivered_tag = record.last_update_tag
+    db_session.add(registration)
+    db_session.commit()
+    response = registered.get(LIST_URL, params={"passesUpdatedSince": str(record.last_update_tag)})
+    assert response.status_code == 204
+
+
+@pytest.mark.parametrize("overflowing_cursor", ["inf", "1e400"])
+def test_an_overflowing_cursor_is_answered_as_if_absent(
+    registered: TestClient, db_session, overflowing_cursor: str
+):
+    # float("inf") and float("1e400") both parse without raising -- they
+    # reach the OverflowError only at int(), and from different sources (a
+    # literal infinity token vs. decimal magnitude overflow), so one shape
+    # passing does not prove the other does. This route has no credential --
+    # any caller can send this -- so it must be answered, and answered as if
+    # no cursor had been sent: with delivered_tag caught up and no other
+    # cursor given, that is the 204 test_a_current_device_gets_204 already
+    # establishes.
+    registration = db_session.get(Registration, (DEVICE, PTID, SERIAL))
+    record = db_session.get(PassRecord, (PTID, SERIAL))
+    registration.delivered_tag = record.last_update_tag
+    db_session.add(registration)
+    db_session.commit()
+    response = registered.get(LIST_URL, params={"passesUpdatedSince": overflowing_cursor})
+    assert response.status_code == 204

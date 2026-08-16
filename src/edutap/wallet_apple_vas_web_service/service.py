@@ -187,8 +187,16 @@ def _cursor(*candidates: str | None) -> int | None:
         if candidate is None:
             continue
         try:
+            # `float(candidate)` also has to be guarded: "inf" and "1e400" both
+            # parse to a float without raising, and `int()` of an infinite float
+            # raises OverflowError rather than ValueError. This route has no
+            # credential -- Apple authenticates it with the device library
+            # identifier, not a token -- so any caller can send a one-word
+            # payload here, and it must land in the same "treat as absent"
+            # branch as any other unparsable value rather than surface as a
+            # bare 500.
             return int(float(candidate))
-        except ValueError:
+        except (ValueError, OverflowError):
             continue
     return None
 
