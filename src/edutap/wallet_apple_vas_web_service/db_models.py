@@ -1,114 +1,127 @@
-"""Database models for registered devices, passes and their registrations."""
+"""The three tables this service owns.
 
-import json
-from collections.abc import Generator
+The shape follows Apple's own storage model in "Adding a Web Service to Update
+Passes": two entities, devices and passes, and one many-to-many relationship,
+registrations.
+
+The `pass` table holds bookkeeping and no pass content. The content belongs to
+the producer that built the pass; this service fetches it at delivery time.
+"""
+
 from datetime import UTC, datetime
-from typing import Any
 
-# See the note in service.py: `models` carries no __init__.py upstream, so the name
-# has to come from the module that defines it.
-from edutap.wallet_apple.models.passes import Pass
-from sqlalchemy import Column, LargeBinary
-from sqlalchemy.types import JSON
-from sqlmodel import Field, Session, SQLModel, create_engine
-from sqlmodel.main import SQLModelConfig
+import sqlalchemy as sa
+from sqlmodel import Field
 
-from .config import AppleWalletWebServiceSettings
-
-# from typing import Literal
+from .base import SCHEMA, Base, metadata
 
 
-# Based on: https://developer.apple.com/documentation/walletpasses/adding_a_web_service_to_update_passes#3733252
+def _utcnow() -> datetime:
+    """Timezone-aware now, for the Python-side default."""
+    return datetime.now(tz=UTC)
 
 
-class AppleDeviceRegistry(SQLModel, table=True):  # type: ignore[call-arg]
+def _timestamp(on_update: bool = False) -> sa.Column:
+    """A timestamptz column whose value the database computes."""
+    kwargs: dict[str, object] = {"server_default": sa.func.now()}
+    if on_update:
+        kwargs["onupdate"] = sa.func.now()
+    return sa.Column(sa.DateTime(timezone=True), nullable=False, **kwargs)
+
+
+def _identifier(*args: object, **kwargs: object) -> sa.Column:
+    """A column holding an opaque external identifier.
+
+    Byte collation, so comparison and index order do not depend on the
+    database's locale — these values are compared for equality by machines,
+    never sorted for humans.
+
+    `*args` carries schema constructs that are positional to `Column`, such as
+    a `ForeignKey`.
     """
-    represents a registered device (Cellphone,tablet, watch, etc.)
-    onto which a pass can be registered
+    return sa.Column(sa.String(255, collation="C"), *args, **kwargs)
+
+
+UPDATE_TAG_SEQUENCE = sa.Sequence("update_tag_seq", schema=SCHEMA, metadata=metadata)
+"""Source of `PassRecord.last_update_tag`.
+
+A sequence rather than a clock. The notifier runs with several replicas, and
+wall clocks on different hosts are not comparable — which is exactly when the
+tag has to be.
+"""
+
+
+class Device(Base, table=True):
+    """A device that holds at least one updatable pass."""
+
+    __tablename__ = "device"
+
+    device_library_identifier: str = Field(sa_column=_identifier(primary_key=True))
+    push_token: str = Field(
+        sa_column=sa.Column(sa.String(255), nullable=False),
+        description="APNs token. A credential: never logged, never returned by an endpoint.",
+    )
+    created_at: datetime = Field(default_factory=_utcnow, sa_column=_timestamp())
+    updated_at: datetime = Field(default_factory=_utcnow, sa_column=_timestamp(on_update=True))
+
+
+class PassRecord(Base, table=True):
+    """One updatable pass — bookkeeping only, no content.
+
+    Named `PassRecord` rather than `Pass`: `pass` is a Python keyword, and
+    `Pass` is already the pass model of `edutap.wallet_apple`.
     """
 
-    id: int | None = Field(default=None, primary_key=True)
-    deviceLibraryIdentitfier: str
-    pushToken: str
-    registrationTime: datetime = Field(default=datetime.now(tz=UTC))
+    __tablename__ = "pass"
+
+    pass_type_identifier: str = Field(sa_column=_identifier(primary_key=True))
+    serial_number: str = Field(sa_column=_identifier(primary_key=True))
+    last_update_tag: int = Field(
+        sa_column=sa.Column(sa.BigInteger, nullable=False),
+        description="Rises on every change of content. Apple leaves its contents to us.",
+    )
+    created_at: datetime = Field(default_factory=_utcnow, sa_column=_timestamp())
+    updated_at: datetime = Field(default_factory=_utcnow, sa_column=_timestamp(on_update=True))
 
 
-class ApplePassData(SQLModel, table=True):  # type: ignore[call-arg]
-    """
-    the full representation of an apple pass
-    including the pass json data and all binary data (images, logos, etc.)
+class Registration(Base, table=True):
+    """One device holding one pass, and how far behind that device is."""
 
-    TODO: state machine, which states a pass can have
-    """
-
-    model_config = SQLModelConfig(
-        arbitrary_types_allowed=True,
+    __tablename__ = "registration"
+    __table_args__ = (
+        sa.ForeignKeyConstraint(
+            ["pass_type_identifier", "serial_number"],
+            [f"{SCHEMA}.pass.pass_type_identifier", f"{SCHEMA}.pass.serial_number"],
+            ondelete="CASCADE",
+        ),
+        # The hot path: every list request filters on exactly these two, and the
+        # result is not small — one pass type identifier may cover many pass
+        # kinds, so a device can hold a two-digit number of registrations under
+        # one of them.
+        sa.Index(
+            "ix_registration_device_library_identifier",
+            "device_library_identifier",
+            "pass_type_identifier",
+        ),
     )
 
-    passTypeIdentifier: str = Field(primary_key=True)
-    serialNumber: str = Field(primary_key=True)
-    lastUpdateTag: datetime = Field(default=datetime.now(tz=UTC))
-    # passStatus: Literal["downloaded", "registered", "unregistered"]
-    passfile: dict = Field(sa_column=Column(JSON), default={})
-    # passFiles: list[LargeBinary]=Field(default=None, sa_column=Column(ARRAY(LargeBinary())))
-    pass_files: dict[str, LargeBinary] = Field(default_factory=dict, sa_column=Column(JSON))
-
-    @classmethod
-    def from_pass(cls, pass_: Pass) -> "ApplePassData":
-        """Creates a ApplePassData record from a Pass object"""
-        filedata = pass_.files_uuencoded
-        passdata = cls(
-            passTypeIdentifier=pass_.passTypeIdentifier,
-            serialNumber=pass_.serialNumber,
-            lastUpdateTag=datetime.now(tz=UTC),
-            passfile=json.loads(pass_.pass_json),
-            pass_files=filedata,
+    device_library_identifier: str = Field(
+        sa_column=_identifier(
+            sa.ForeignKey(f"{SCHEMA}.device.device_library_identifier", ondelete="CASCADE"),
+            primary_key=True,
         )
-        return passdata
-
-    def to_pass(self) -> Pass:
-        """Creates a Pass object from a ApplePassData record"""
-        pass_ = Pass.model_validate(self.passfile)
-        pass_.files_uuencoded = self.pass_files
-        return pass_
-
-
-class ApplePassRegistry(SQLModel, table=True):  # type: ignore[call-arg]
-    """Represents the registration of a pass on a device
-    TODO: add state machine (downloaded, registered, unregistered)
-
-    It can happen thata pass gets registered,but the passdata is not (yet) available.
-    In this case the passdata will be created epty and filled later.
-
-    """
-
-    id: int | None = Field(default=None, primary_key=True)
-    deviceLibraryIdentitfier: str  # Foreign key to AppleDeviceRegistry
-    passTypeIdentifier: str  # Forein key to ApplePassData
-    serialNumber: str
-    registrationTime: datetime = Field(default=datetime.now(tz=UTC))
-
-
-def init_model(engine):
-    """Create the tables this service owns if they are absent."""
-    SQLModel.metadata.create_all(engine)
-
-
-def get_session() -> Generator[Session, Any, Any]:
-    """Yield a database session; used as a FastAPI dependency."""
-    settings: AppleWalletWebServiceSettings = AppleWalletWebServiceSettings()
-
-    # No ``print`` and no ``echo``: the settings instance carries the database
-    # password, and echo writes every statement including its bound parameters --
-    # which for this service is registered device tokens and pass serial numbers.
-    port = f":{settings.db.port}" if settings.db.port != 5432 else ""
-    engine = create_engine(
-        f"{settings.db.type}+{settings.db.driver}://"
-        f"{settings.db.username}:{settings.db.password}"
-        f"@{settings.db.host}{port}/{settings.db.name}",
     )
-
-    # Generate Tables
-    init_model(engine)
-    with Session(engine) as session:
-        yield session
+    pass_type_identifier: str = Field(sa_column=_identifier(primary_key=True))
+    serial_number: str = Field(sa_column=_identifier(primary_key=True))
+    delivered_tag: int | None = Field(
+        default=None,
+        sa_column=sa.Column(sa.BigInteger, nullable=True),
+        description="The tag this device provably holds. Null until the first delivery.",
+    )
+    last_pushed_at: datetime | None = Field(
+        default=None, sa_column=sa.Column(sa.DateTime(timezone=True), nullable=True)
+    )
+    last_delivered_at: datetime | None = Field(
+        default=None, sa_column=sa.Column(sa.DateTime(timezone=True), nullable=True)
+    )
+    created_at: datetime = Field(default_factory=_utcnow, sa_column=_timestamp())

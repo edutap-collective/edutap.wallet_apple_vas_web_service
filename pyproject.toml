@@ -69,6 +69,15 @@ sql = [
     "sqlmodel==0.0.39",
 ]
 
+# How `edutap.db_definitions` finds this package's tables. Several packages share
+# one database; the tool scans this entry point to check them against each other
+# for colliding names and for types left to `search_path`.
+#
+# It is a *development* dependency and never a runtime one -- `dbdef.py` guards
+# the import so a deployment without the tool imports cleanly.
+[project.entry-points."edutap.db_definitions"]
+schema = "edutap.wallet_apple_vas_web_service.dbdef:definition"
+
 # PEP 735 rather than an extra: development tooling is nothing a consumer of this
 # package can select, and an extra would publish it in the package metadata. Install
 # with `uv pip install -e . --group dev`, which is what the Makefile and CI do.
