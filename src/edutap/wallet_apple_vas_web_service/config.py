@@ -135,7 +135,13 @@ class AppleWalletWebServiceSettings(_FileAwareSettings):
     def accepted_secrets(self) -> list[str]:
         """Return every secret a presented token may have been derived from."""
         secrets = [self.authentication_secret, *self.previous_authentication_secrets]
-        return [secret.get_secret_value() for secret in secrets if secret is not None]
+        # An empty string is treated as no secret: fail-closed means an unquoted value
+        # expanding to "" in a .env file does not punch a hole in authentication.
+        return [
+            secret.get_secret_value()
+            for secret in secrets
+            if secret is not None and secret.get_secret_value()
+        ]
 
 
 def get_settings() -> AppleWalletWebServiceSettings:
