@@ -73,9 +73,11 @@ def _authorized(
     pass_type_identifier: str,
     serial_number: str,
 ) -> bool:
-    """Whether this request carries the authentication token of this pass."""
-    if not settings.auth_required:
-        return True
+    """Whether this request carries the authentication token of this pass.
+
+    There is no way to switch this off; see `config.py` for the `auth_required`
+    flag that used to sit here and what it did.
+    """
     return verify_authorization(
         authorization, settings.accepted_secrets(), pass_type_identifier, serial_number
     )

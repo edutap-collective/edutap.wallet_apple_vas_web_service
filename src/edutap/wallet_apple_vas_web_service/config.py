@@ -134,7 +134,13 @@ class AppleWalletWebServiceSettings(_FileAwareSettings):
         extra="ignore",
     )
 
-    auth_required: bool = True
+    # There is deliberately no `auth_required` switch. It existed, defaulted to
+    # `True`, and made `_authorized` return `True` unconditionally when set to
+    # `false` -- handing the full pass to anyone who guessed a serial number,
+    # from a single environment variable, on an endpoint that is public by
+    # design. It appeared in no test, no README and no compose file, so nothing
+    # was using it and no deployment that omits it is affected by its removal.
+    # A deployment that wants authentication off does not want this service.
     log_file_path: Path = Path("/") / "var" / "log" / "wallet_apple_vas_web_service"
 
     url: HttpUrl | None = None

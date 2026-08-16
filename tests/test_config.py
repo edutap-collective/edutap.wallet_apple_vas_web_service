@@ -87,6 +87,27 @@ def test_previous_authentication_secrets_file_convention(tmp_path, monkeypatch):
     assert settings.previous_authentication_secrets[1].get_secret_value() == "oldest-secret"
 
 
+def test_authentication_cannot_be_switched_off_by_configuration(monkeypatch):
+    """No environment variable makes `_authorized` say yes to a wrong token.
+
+    `EDUTAP_WALLET_APPLE_VAS_WEB_SERVICE_AUTH_REQUIRED=false` used to make
+    `_authorized` return `True` unconditionally -- the full pass to anyone who
+    guessed a serial number, from one variable. The field is gone and the
+    settings ignore unknown environment variables, so the name is now inert.
+
+    Asserted through `_authorized` rather than through `model_fields`: what
+    matters is the answer, not whether an attribute of that particular name
+    exists.
+    """
+    from edutap.wallet_apple_vas_web_service.service import _authorized
+
+    monkeypatch.setenv("EDUTAP_WALLET_APPLE_VAS_WEB_SERVICE_AUTH_REQUIRED", "false")
+    settings = AppleWalletWebServiceSettings(authentication_secret=SecretStr("a-secret"))
+
+    assert not _authorized(None, settings, "pass.de.lmu.events", "serial-one")
+    assert not _authorized("ApplePass wrong", settings, "pass.de.lmu.events", "serial-one")
+
+
 def test_the_database_password_is_masked_in_repr():
     """`repr(settings)` must not carry the database password in clear text.
 
