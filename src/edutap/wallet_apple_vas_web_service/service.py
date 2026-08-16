@@ -12,7 +12,7 @@ from sqlmodel import Session, select
 
 from .config import AppleWalletWebServiceSettings, get_settings
 from .db_models import UPDATE_TAG_SEQUENCE, Device, PassRecord, Registration
-from .http_models import AppleWalletWebServiceAuthorizationPayload, LogEntries
+from .http_models import AppleWalletWebServiceAuthorizationPayload, LogEntries, SerialNumbers
 from .session import get_session
 from .tokens import verify_authorization
 
@@ -172,6 +172,82 @@ async def register_pass(
     )
     session.commit()
     return Response(status_code=201 if created else 200)
+
+
+def _cursor(*candidates: str | None) -> int | None:
+    """Return the first parsable cursor value, or None.
+
+    Apple's current endpoint page names the parameter `previousLastUpdated`,
+    while the wire has carried `passesUpdatedSince` since the protocol was
+    published; see the design document. Both are accepted, and a value that does
+    not parse is treated as absent -- an unreadable cursor must widen the answer,
+    never narrow it.
+    """
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        try:
+            return int(float(candidate))
+        except ValueError:
+            continue
+    return None
+
+
+@router.get("/devices/{deviceLibraryIdentifier}/registrations/{passTypeIdentifier}")
+async def list_updatable_passes(
+    deviceLibraryIdentifier: str,
+    passTypeIdentifier: str,
+    passesUpdatedSince: str | None = None,
+    previousLastUpdated: str | None = None,
+    *,
+    session: Session = Depends(get_session),
+) -> Response:
+    """Send the serial numbers for updated passes to a device.
+
+    https://developer.apple.com/documentation/walletpasses/get-the-list-of-updatable-passes
+
+    No authorization: Apple authenticates this call with the device library
+    identifier itself, which is the other of the two shared secrets. The URL
+    carries no serial number, so a per-pass token could not be checked here even
+    if one were sent.
+
+    Answers 200 with a SerialNumbers body, or 204 when nothing matches.
+    """
+    cursor = _cursor(passesUpdatedSince, previousLastUpdated)
+
+    rows = session.exec(
+        select(Registration, PassRecord)
+        .join(
+            PassRecord,
+            (Registration.pass_type_identifier == PassRecord.pass_type_identifier)
+            & (Registration.serial_number == PassRecord.serial_number),
+        )
+        .where(
+            Registration.device_library_identifier == deviceLibraryIdentifier,
+            Registration.pass_type_identifier == passTypeIdentifier,
+        )
+    ).all()
+
+    behind = [
+        (registration, record)
+        for registration, record in rows
+        # Our own record is the precise filter, the device's cursor the safety
+        # net. A missing cursor contributes no evidence of its own -- it must
+        # not widen the list beyond what our own record already says, or a
+        # device that is fully caught up but omits the cursor would be told
+        # it is behind on every pass it holds.
+        if registration.delivered_tag is None
+        or record.last_update_tag > registration.delivered_tag
+        or (cursor is not None and record.last_update_tag > cursor)
+    ]
+    if not behind:
+        return Response(status_code=204)
+
+    payload = SerialNumbers(
+        serialNumbers=[record.serial_number for _, record in behind],
+        lastUpdated=str(max(record.last_update_tag for _, record in behind)),
+    )
+    return Response(payload.model_dump_json(), status_code=200, media_type="application/json")
 
 
 @router.delete(
