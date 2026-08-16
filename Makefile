@@ -4,7 +4,7 @@ PYTHON := .venv/bin/python
 VENV   := .venv
 
 .DEFAULT_GOAL := help
-.PHONY: help venv lint typecheck reformat test-local test-integration docker-build run
+.PHONY: help venv lint typecheck reformat test-local test-integration migrate docker-build run
 
 help: ## Show available targets
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -15,8 +15,8 @@ venv: ## Create .venv and install the package with its dev group
 	uv pip install -U -e ".[fastapi,sql]" --group dev
 
 lint: venv ## Run ruff checks (blocking)
-	$(PYTHON) -m ruff check src tests
-	$(PYTHON) -m ruff format --check src tests
+	$(PYTHON) -m ruff check src tests migrations
+	$(PYTHON) -m ruff format --check src tests migrations
 
 # Separate from `lint`, and not yet blocking. `ty` reports 17 errors, and every one
 # of them is a real defect this package already knows about: a Pass API that no
@@ -30,8 +30,8 @@ typecheck: venv ## Run the type checker (reports known defects, non-blocking)
 	-$(PYTHON) -m ty check src
 
 reformat: venv ## Autoformat and autofix
-	$(PYTHON) -m ruff format src tests
-	$(PYTHON) -m ruff check --fix src tests
+	$(PYTHON) -m ruff format src tests migrations
+	$(PYTHON) -m ruff check --fix src tests migrations
 
 test-local: venv ## Unit tests, no database needed
 	$(PYTHON) -m pytest -v
@@ -40,6 +40,13 @@ test-local: venv ## Unit tests, no database needed
 # throwaway database -- these tests create and drop tables.
 test-integration: venv ## Tests against a real PostgreSQL
 	$(PYTHON) -m pytest -m integration -v
+
+# The same command the deployment runs out of the image, against whatever
+# EDUTAP_WALLET_APPLE_VAS_WEB_SERVICE_DB_* names -- there is no URL in
+# alembic.ini, deliberately, so this cannot connect to the wrong database by
+# forgetting to set something.
+migrate: venv ## Apply the migrations to the configured database
+	$(PYTHON) -m alembic upgrade head
 
 # The image is what reaches the cluster, and it is where this service last broke:
 # a build that succeeds proves the pins resolve and the entry point imports. The

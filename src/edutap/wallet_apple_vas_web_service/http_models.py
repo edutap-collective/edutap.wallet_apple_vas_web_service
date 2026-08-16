@@ -18,12 +18,15 @@ class AppleWalletWebServiceAuthorizationPayload(BaseModel):
 
 
 class SerialNumbers(BaseModel):
-    """An object that contains serial numbers for the updatable passes on a device.
+    """The body of a successful list response.
 
-    see: https://developer.apple.com/documentation/walletpasses/serialnumbers
+    https://developer.apple.com/documentation/walletpasses/serialnumbers
+
+    `lastUpdated` is a string. Apple's example shows `"1351901923"`, and the
+    device stores the value opaquely and returns it unchanged.
     """
 
-    serialNumers: list[str]
+    serialNumbers: list[str]
     lastUpdated: str
 
 

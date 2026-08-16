@@ -49,6 +49,15 @@ dependencies = [
     # different image.
     "edutap.wallet_apple==1.0.0a5",
     "requests==2.34.2",
+    # Runtime, not a development dependency: `migrations/` is how this package's
+    # tables come into existence, and `alembic upgrade head` is run in operation
+    # -- by the deployment, out of this same image, under a role that has CREATE
+    # (see `app_roles/stack_edutap/tasks/migrate.yml` in `ansible-app-server`,
+    # which runs each package's own migrations from the package's own image).
+    #
+    # >=1.16 would be the floor for the `module` post-write hook type alembic.ini
+    # registers; the pin is exact for the same reason every other pin here is.
+    "alembic==1.19.1",
 ]
 
 [project.optional-dependencies]
@@ -68,6 +77,15 @@ sql = [
     "psycopg2-binary==2.9.12",
     "sqlmodel==0.0.39",
 ]
+
+# How `edutap.db_definitions` finds this package's tables. Several packages share
+# one database; the tool scans this entry point to check them against each other
+# for colliding names and for types left to `search_path`.
+#
+# It is a *development* dependency and never a runtime one -- `dbdef.py` guards
+# the import so a deployment without the tool imports cleanly.
+[project.entry-points."edutap.db_definitions"]
+schema = "edutap.wallet_apple_vas_web_service.dbdef:definition"
 
 # PEP 735 rather than an extra: development tooling is nothing a consumer of this
 # package can select, and an extra would publish it in the package metadata. Install
@@ -105,6 +123,18 @@ markers = [
 # Without this, a plain `pytest` fails on any machine without PostgreSQL, and a suite
 # that fails for environmental reasons is a suite nobody runs.
 addopts = "-m 'not integration'"
+
+# An `xfail` states a limitation. Without `strict`, a limitation that later
+# disappears turns into a silent `XPASS` -- the suite goes on carrying a false
+# statement about the code, and the `reason=` text stays in the file as
+# documentation of something that is no longer true. That is exactly what
+# happened to the `_FILE` convention's `xfail`: it asserted that a complex field
+# could not be loaded from a Docker secret, and the reason it gave for that
+# ("reworking it touches every settings field") was wrong.
+#
+# There is no `xfail` in the suite as this is written. The setting is here so
+# that the next one has to be honest from the day it is added.
+xfail_strict = true
 
 [tool.ruff]
 line-length = 100
