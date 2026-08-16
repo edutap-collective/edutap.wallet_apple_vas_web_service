@@ -1,21 +1,19 @@
 """The Apple Wallet web service endpoints: register, list, unregister, deliver, log."""
 
 import logging
-import secrets
 from contextlib import asynccontextmanager
-from datetime import datetime
 from typing import Annotated
 
-# `models` is an implicit namespace package upstream -- it has no __init__.py, so
-# the name has to come from the module that defines it rather than from the package.
-from edutap.wallet_apple.models.passes import Pass
+import sqlalchemy as sa
 from fastapi import APIRouter, Depends, Header, Request
 from fastapi.responses import Response
-from sqlmodel import Session, select
+from sqlmodel import Session
 
 from .config import AppleWalletWebServiceSettings, get_settings
-from .db_models import AppleDeviceRegistry, ApplePassData, ApplePassRegistry, get_session
-from .http_models import AppleWalletWebServiceAuthorizationPayload, LogEntries, SerialNumbers
+from .db_models import UPDATE_TAG_SEQUENCE, Device, PassRecord, Registration
+from .http_models import AppleWalletWebServiceAuthorizationPayload, LogEntries
+from .session import get_session
+from .tokens import verify_authorization
 
 LOGGER = logging.getLogger(__name__)
 
@@ -34,47 +32,38 @@ router = APIRouter(
 )
 
 
-def check_authentification_token(
-    authorization_header_string: str | None,
-    expected_token: str | None,
-    auth_required: bool = True,
-) -> bool:
-    """Check the ``Authorization: ApplePass <token>`` header against the settings.
-
-    The accepted token used to be a constant in this file, which put a working
-    credential in a public repository. It now comes from
-    ``EDUTAP_WALLET_APPLE_VAS_WEB_SERVICE_AUTHENTICATION_TOKEN`` (or the matching
-    ``_FILE`` variable, so it can arrive as a Docker secret).
-
-    With ``auth_required`` set and no token configured every request is rejected.
-    A deployment that forgot the value must fail closed, not accept anything.
-    """
-    if not auth_required:
-        return True
-    if authorization_header_string is None or expected_token is None:
-        return False
-    parts = authorization_header_string.split()
-    if len(parts) != 2:
-        return False
-    auth_type, auth_token = parts
-    if auth_type != "ApplePass":
-        return False
-    # Constant time: the comparison decides access, and `==` on str leaks the
-    # length of the matching prefix through its timing.
-    return secrets.compare_digest(auth_token, expected_token)
-
-
 """
 see: https://developer.apple.com/documentation/walletpasses/adding_a_web_service_to_update_passes
 """
 
 
-@router.post(
-    "/devices/{deviceLibraryIdentitfier}/registrations/{passTypeIdentifier}/{serialNumber}"
-)
+def next_update_tag(session: Session) -> int:
+    """Return the next value of the update-tag sequence.
+
+    Through the `Sequence` construct rather than a hand-written `nextval(...)`:
+    the sequence lives in this package's schema, and a bare name would resolve
+    through `search_path` to whatever the connecting role happens to look at.
+    """
+    return session.execute(sa.select(UPDATE_TAG_SEQUENCE.next_value())).scalar_one()
+
+
+def _authorized(
+    authorization: str | None,
+    settings: AppleWalletWebServiceSettings,
+    pass_type_identifier: str,
+    serial_number: str,
+) -> bool:
+    """Whether this request carries the authentication token of this pass."""
+    if not settings.auth_required:
+        return True
+    return verify_authorization(
+        authorization, settings.accepted_secrets(), pass_type_identifier, serial_number
+    )
+
+
+@router.post("/devices/{deviceLibraryIdentifier}/registrations/{passTypeIdentifier}/{serialNumber}")
 async def register_pass(
-    request: Request,
-    deviceLibraryIdentitfier: str,
+    deviceLibraryIdentifier: str,
     passTypeIdentifier: str,
     serialNumber: str,
     authorization: Annotated[str | None, Header()] = None,
@@ -82,261 +71,61 @@ async def register_pass(
     *,
     settings: AppleWalletWebServiceSettings = Depends(get_settings),
     session: Session = Depends(get_session),
-):
-    """Registration: register a device to receive push notifications for a pass.
+) -> Response:
+    """Register a device to receive update notifications for a pass.
 
-    see: https://developer.apple.com/documentation/walletpasses/register_a_pass_for_update_notifications
+    https://developer.apple.com/documentation/walletpasses/register-a-pass-for-update-notifications
 
-    URL: POST https://yourpasshost.example.com/v1/devices/{deviceLibraryIdentifier}/registrations/{passTypeIdentifier}/{serialNumber}
-    HTTP-Methode: POST
-    HTTP-PATH:
-        /v1/devices/{deviceLibraryIdentifier}/registrations/{passTypeIdentifier}/{serialNumber}
-    HTTP-Path-Parameters:
-        * deviceLibraryIdentifier: str (required) A unique identifier you use to
-          identify and authenticate the device.
-        * passTypeIdentifier: str (required) The pass type identifier of the pass to
-          register for update notifications. This value corresponds to the value of
-          the passTypeIdentifier key of the pass.
-        * serialNumber: str (required)
-    HTTP-Headers:
-        * Authorization: ApplePass <authenticationToken>
-    HTTP-Body: JSON payload:
-        * pushToken: <push token, which the server needs to send push notifications
-          to this device> }
-
-    Params definition
-    :deviceLibraryIdentitfier      - the device's identifier
-    :passTypeIdentifier   - the bundle identifier for a class of passes, sometimes
-        referred to as the pass topic, e.g. pass.com.apple.backtoschoolgift,
-        registered with WWDR
-    :serialNumber  - the pass' serial number
-    :pushToken      - the value needed for Apple Push Notification service
-
-    server action: if the authentication token is correct, associate the given push
-        token and device identifier with this pass
-    server response:
-    --> if registration succeeded: 201
-    --> if this serial number was already registered for this device: 304
-    --> if not authorized: 401
-
-    :async:
-    :param str deviceLibraryIdentifier: A unique identifier you use to identify and
-        authenticate the device.
-    :param str passTypeIdentifier:      The pass type identifier of the pass to
-        register for update notifications. This value corresponds to the value of the
-        passTypeIdentifier key of the pass.
-    :param str serialNumber:            The serial number of the pass to register.
-        This value corresponds to the serialNumber key of the pass.
-
-    :return:
+    Apple's tasks for this call: create the pass entry if it does not exist,
+    create the device entry if it does not exist, store the mapping between
+    them. Answers 201 on a new registration, 200 when the serial number was
+    already registered for the device, 401 when unauthorized.
     """
-    if not check_authentification_token(
-        authorization, settings.authentication_token, settings.auth_required
-    ):
+    if not _authorized(authorization, settings, passTypeIdentifier, serialNumber):
         return Response(status_code=401)
 
-    # A missing body is a bad request, not an assertion. `assert` disappears under
-    # `python -O`, which would let a None reach `data.pushToken` below and turn a
-    # malformed registration into a 500.
+    # A missing body is a bad request, not an assertion: `assert` disappears
+    # under `python -O`, and a None would reach `data.pushToken` below and turn
+    # a malformed registration into a 500.
     if data is None:
         return Response(status_code=400)
 
-    # Register Device
-    statement = select(AppleDeviceRegistry).where(
-        AppleDeviceRegistry.deviceLibraryIdentitfier == deviceLibraryIdentitfier
-    )
-    db_device_entry = session.exec(statement)
-    db_device_entry = db_device_entry.first()
-    if db_device_entry is None:
-        new_device_entry = AppleDeviceRegistry(
-            deviceLibraryIdentitfier=deviceLibraryIdentitfier, pushToken=data.pushToken
+    device = session.get(Device, deviceLibraryIdentifier)
+    if device is None:
+        session.add(
+            Device(device_library_identifier=deviceLibraryIdentifier, push_token=data.pushToken)
         )
-        session.add(new_device_entry)
-        session.commit()
+    elif device.push_token != data.pushToken:
+        # A device that re-registers with a new token has moved; pushing to the
+        # old one would silently reach nobody.
+        device.push_token = data.pushToken
+        session.add(device)
 
-    # Register Pass
-    statement = select(ApplePassRegistry).where(
-        ApplePassRegistry.deviceLibraryIdentitfier == deviceLibraryIdentitfier
-        and ApplePassRegistry.passTypeIdentifier == passTypeIdentifier
-        and ApplePassRegistry.serialNumber == serialNumber
-    )
-    db_entry = session.exec(statement).first()
-
-    if db_entry is None:
-        new_entry = ApplePassRegistry(
-            deviceLibraryIdentitfier=deviceLibraryIdentitfier,
-            passTypeIdentifier=passTypeIdentifier,
-            serialNumber=serialNumber,
-        )
-        session.add(new_entry)
-        session.commit()
-
-        return Response(status_code=201)
-
-    return Response(status_code=200)
-
-
-@router.get("/devices/{deviceLibraryIdentitfier}/registrations/{passTypeIdentifier}")
-async def update_pass(
-    request: Request,
-    deviceLibraryIdentitfier: str,
-    passTypeIdentifier: str,
-    passesUpdatedSince: str | None = None,
-    authorization: Annotated[str | None, Header()] = None,
-    *,
-    settings: AppleWalletWebServiceSettings = Depends(get_settings),
-    session: Session = Depends(get_session),
-):
-    """Get List of Updatable Passes
-
-    see: https://developer.apple.com/documentation/walletpasses/get_the_list_of_updatable_passes
-
-    Send the serial numbers for updated passes to a device.
-
-    get all serial #s associated with a device for passes that need an update
-    Optionally with a query limiter to scope the last update since
-
-    GET /v1/devices/<deviceID>/registrations/<typeID>
-    GET /v1/devices/<deviceID>/registrations/<typeID>?passesUpdatedSince=<tag>
-
-    server action: figure out which passes associated with this device have been
-        modified since the supplied tag (if no tag provided, all associated serial #s)
-    server response:
-    --> if there are matching passes: 200, with JSON payload:
-        { "lastUpdated" : <new tag>, "serialNumbers" : [ <array of serial #s> ] }
-    --> if there are no matching passes: 204
-    --> if unknown device identifier: 404
-
-    :async:
-    :param str deviceLibraryIdentitfier: The unique identifier for the device.
-    :param str
-
-    """
-    if not check_authentification_token(
-        authorization, settings.authentication_token, settings.auth_required
-    ):
-        return Response(status_code=401)
-
-    updatedSince = datetime(1970, 1, 1)
-    if passesUpdatedSince:
-        updatedSince = datetime.fromtimestamp(float(passesUpdatedSince))
-
-    statement = select(ApplePassData).where(ApplePassData.passTypeIdentifier == passTypeIdentifier)
-    db_entries = session.exec(statement).all()
-
-    if db_entries:
-        passes_to_update = []
-        last_update = datetime(1970, 1, 1)
-        for entry in db_entries:
-            if entry.lastUpdateTag > updatedSince:
-                passes_to_update.append(entry.serialNumber)
-                last_update = max(entry.lastUpdateTag, last_update)
-
-        if passes_to_update:
-            payload = SerialNumbers(
-                serialNumers=passes_to_update, lastUpdated=last_update.timestamp()
+    if session.get(PassRecord, (passTypeIdentifier, serialNumber)) is None:
+        session.add(
+            PassRecord(
+                pass_type_identifier=passTypeIdentifier,
+                serial_number=serialNumber,
+                last_update_tag=next_update_tag(session),
             )
-            return Response(payload, status_code=200, media_type="application/json")
+        )
 
-    # No matching passes:
-    return Response(status_code=204)
-
-
-@router.delete(
-    "/devices/{deviceLibraryIdentitfier}/registrations/{passTypeIdentifier}/{serialNumber}"
-)
-async def unregister_pass(
-    request: Request,
-    deviceLibraryIdentitfier: str,
-    passTypeIdentifier: str,
-    serialNumber: str,
-    authorization: Annotated[str | None, Header()] = None,
-    *,
-    settings: AppleWalletWebServiceSettings = Depends(get_settings),
-    session: Session = Depends(get_session),
-):
-    """Unregister
-
-    unregister a device to receive push notifications for a pass
-
-    DELETE /v1/devices/<deviceID>/registrations/<passTypeID>/<serial#>
-    Header: Authorization: ApplePass <authenticationToken>
-
-    server action: if the authentication token is correct, disassociate the device from this pass
-    server response:
-    --> if disassociation succeeded: 200
-    --> if not authorized: 401
-
-    """
-    if not check_authentification_token(
-        authorization, settings.authentication_token, settings.auth_required
-    ):
-        return Response(status_code=401)
-
-    statement = select(ApplePassRegistry).where(
-        ApplePassRegistry.deviceLibraryIdentitfier == deviceLibraryIdentitfier
-        and ApplePassRegistry.passTypeIdentifier == passTypeIdentifier
-        and ApplePassRegistry.serialNumber == serialNumber
+    existing = session.get(
+        Registration, (deviceLibraryIdentifier, passTypeIdentifier, serialNumber)
     )
-
-    results = session.exec(statement)
-    db_entries = results.all()
-
-    if db_entries:
-        for entry in db_entries:
-            session.delete(entry)
+    if existing is not None:
         session.commit()
         return Response(status_code=200)
 
-    return Response(status_code=404)
-
-
-@router.get("/passes/{passTypeIdentifier}/{serialNumber}")
-async def send_updated_pass(
-    request: Request,
-    passTypeIdentifier: str,
-    serialNumber: str,
-    authorization: Annotated[str | None, Header()] = None,
-    *,
-    settings: AppleWalletWebServiceSettings = Depends(get_settings),
-    session: Session = Depends(get_session),
-):
-    """Pass delivery
-
-    GET /v1/passes/<typeID>/<serial#>
-    Header: Authorization: ApplePass <authenticationToken>
-
-    server response:
-    --> if auth token is correct: 200, with pass data payload as pkpass-file
-    --> if auth token is incorrect: 401
-    """
-    if not check_authentification_token(
-        authorization, settings.authentication_token, settings.auth_required
-    ):
-        return Response(status_code=401)
-
-    statement = select(ApplePassData).where(
-        ApplePassData.passTypeIdentifier == passTypeIdentifier
-        and ApplePassData.serialNumber == serialNumber
+    session.add(
+        Registration(
+            device_library_identifier=deviceLibraryIdentifier,
+            pass_type_identifier=passTypeIdentifier,
+            serial_number=serialNumber,
+        )
     )
-    results = session.exec(statement)
-    db_entries = results.all()
-
-    passfile = Pass(db_entries.first().passData)
-
-    zip = passfile.create(
-        settings.apple.certificate,
-        settings.apple.key,
-        settings.apple.wwdr_certificate,
-        settings.apple.password,
-    )
-
-    return Response(
-        zip.getvalue(),
-        status_code=200,
-        media_type="application/vnd.apple.pkpass",
-        headers={"Content-Disposition": f'attachment; filename="{serialNumber}.pkpass"'},
-    )
+    session.commit()
+    return Response(status_code=201)
 
 
 @router.post("/log")

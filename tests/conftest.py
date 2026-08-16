@@ -37,3 +37,30 @@ def db_session(engine):
         yield session
     transaction.rollback()
     connection.close()
+
+
+@pytest.fixture
+def client(db_session):
+    """A TestClient whose session, secrets and producer are the test's own."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from edutap.wallet_apple_vas_web_service import service
+    from edutap.wallet_apple_vas_web_service.config import (
+        AppleWalletWebServiceSettings,
+        get_settings,
+    )
+
+    settings = AppleWalletWebServiceSettings(
+        authentication_secret="an-issuer-secret",
+        producer_pass_url_template=(
+            "https://builder.invalid/api/v1/passes/{pass_type_identifier}/{serial_number}"
+        ),
+        producer_api_token="a-producer-token",
+    )
+
+    app = FastAPI()
+    app.include_router(service.router)
+    app.dependency_overrides[service.get_session] = lambda: db_session
+    app.dependency_overrides[get_settings] = lambda: settings
+    return TestClient(app)
