@@ -22,6 +22,24 @@ services:
       - EDUTAP_WALLET_APPLE_VAS_WEB_SERVICE_DB_NAME=${EDUTAP_WALLET_APPLE_VAS_WEB_SERVICE_DB_NAME}
       - EDUTAP_WALLET_APPLE_VAS_WEB_SERVICE_DB_USERNAME=${EDUTAP_WALLET_APPLE_VAS_WEB_SERVICE_DB_USERNAME}
       - EDUTAP_WALLET_APPLE_VAS_WEB_SERVICE_DB_PASSWORD=${EDUTAP_WALLET_APPLE_VAS_WEB_SERVICE_DB_PASSWORD}
+      # Without these three the environment in this repository comes up and then
+      # answers 401 to every registration and 503 to every delivery, with nothing
+      # in the log that says why -- both are the correct fail-closed answers to
+      # "no issuer secret" and "no producer". The defaults are development
+      # placeholders and none of them belongs in a deployment: there the issuer
+      # secret and the producer token come from the vault, through the `_FILE`
+      # convention (`..._AUTHENTICATION_SECRET_FILE=/run/secrets/...`).
+      #
+      # `dev-issuer-secret` has to be the same value the producer derives its
+      # passes' authenticationToken from; see the README. A pass built under a
+      # different secret installs, looks right in Wallet, and is answered 401 for
+      # ever.
+      - EDUTAP_WALLET_APPLE_VAS_WEB_SERVICE_AUTHENTICATION_SECRET=${EDUTAP_WALLET_APPLE_VAS_WEB_SERVICE_AUTHENTICATION_SECRET:-dev-issuer-secret}
+      # The producer this deployment fetches built passes from. Both placeholders
+      # are substituted by name; the default points at the mock service the
+      # development setup runs.
+      - EDUTAP_WALLET_APPLE_VAS_WEB_SERVICE_PRODUCER_PASS_URL_TEMPLATE=${EDUTAP_WALLET_APPLE_VAS_WEB_SERVICE_PRODUCER_PASS_URL_TEMPLATE:-http://mock-service:8000/api/v1/passes/{pass_type_identifier}/{serial_number}}
+      - EDUTAP_WALLET_APPLE_VAS_WEB_SERVICE_PRODUCER_API_TOKEN=${EDUTAP_WALLET_APPLE_VAS_WEB_SERVICE_PRODUCER_API_TOKEN:-dev-producer-token}
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.apple-wallet-vas-web-service.rule=Host(`${DOMAIN}`) && PathPrefix(`/`)"

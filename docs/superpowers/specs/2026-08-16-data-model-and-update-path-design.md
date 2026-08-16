@@ -406,12 +406,20 @@ With one device this is exact. With an iPhone and a paired Watch it is not, and
 it reaches the list endpoint too: a Watch that registers, and whose paired phone
 fetches the pass before the Watch's own first poll, is recorded as holding a
 pass it never received. Having no cursor of its own yet, it is answered `204`.
-After any one successful list response it has a cursor and the safety net works
-again, so the window is narrow — but it is real, and it is the same defect
-arriving at a second endpoint.
 
-Closing it needs `last_pushed_at`, which the notifier owns. It is not solvable
-from Apple's request alone.
+**Narrow, real, and — until the notifier ships — unrecoverable.** The escape
+from that window is the device's own cursor, and the cursor only helps once
+`last_update_tag` rises above it. On the implementation as it stands, nothing
+raises that tag: `_upsert_pass_record` sets it when it creates the pass row and
+`ON CONFLICT DO NOTHING` never touches it again, and no other code path writes
+the column at all. So the affected device is not *delayed* until the next
+change — there is no next change. It holds a pass it never received, is told
+`204` every time it asks, and no mechanism in this service can rescue it. The
+first thing that raises a tag is the notifier, which does not exist yet; until
+then the window has no far edge.
+
+Closing it properly needs `last_pushed_at`, which the notifier owns. It is not
+solvable from Apple's request alone.
 
 This makes the state readable: `pass.last_update_tag > registration.delivered_tag`
 means this device is behind, and `last_delivered_at` says since when. Push
